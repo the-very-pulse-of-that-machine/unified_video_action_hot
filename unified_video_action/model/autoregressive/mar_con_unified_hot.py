@@ -4,14 +4,15 @@ import numpy as np
 from tqdm import tqdm
 import scipy.stats as stats
 import math
-from einops import rearrange
+from einops import rearrange, repeat
 import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
-from unified_video_action.model.autoregressive.hot_transformer_block import HOTTransformerBlock
+from timm.models.vision_transformer import Block
 from unified_video_action.model.autoregressive.diffusion_loss import DiffLoss
 from unified_video_action.model.autoregressive.diffusion_action_loss import DiffActLoss
+from unified_video_action.model.autoregressive.hot import CrossAttention, cluster_dpc_knn
 
 
 def mask_by_order(mask_len, order, bsz, seq_len, device):
@@ -57,6 +58,8 @@ class MAR(nn.Module):
         act_diff_training_steps=1000,
         act_diff_testing_steps="100",
         action_model_params={},
+        hot_select_ratio = 0.3,
+        hot_layer_index = 3,
         **kwargs
     ):
         super().__init__()
@@ -69,6 +72,9 @@ class MAR(nn.Module):
         self.predict_wrist_img = kwargs["predict_wrist_img"]
         self.predict_proprioception = kwargs["predict_proprioception"]
         self.n_frames = 4
+        self.encoder_depth = encoder_depth
+        self.decoder_depth = decoder_depth
+
 
         # ========= VAE and patchify specifics =========
         self.img_size = img_size
@@ -80,6 +86,29 @@ class MAR(nn.Module):
         self.vae_embed_dim = vae_embed_dim
         self.grad_checkpointing = grad_checkpointing
         self.label_drop_prob = label_drop_prob
+
+
+
+        self.token_num = int((self.seq_len * self.n_frames) * hot_select_ratio)
+        self.recover_num = self.seq_len * self.n_frames
+    
+        self.layer_index = hot_layer_index  # 进行聚类的层索引
+
+        self.pool = nn.AdaptiveAvgPool1d(1)  # 全局平均池化
+        self.pos_embed_token = nn.Parameter(torch.zeros(1, self.token_num, encoder_embed_dim))  # 聚类token的位置编码
+
+        qkv_bias = True
+        qk_scale = None
+        
+        self.recover_token = nn.Parameter(torch.zeros(1, self.recover_num, encoder_embed_dim))  # 可学习的恢复token
+        self.cross_attention = CrossAttention(encoder_embed_dim, num_heads=encoder_num_heads, qkv_bias=qkv_bias, \
+            qk_scale=qk_scale, attn_drop=attn_dropout, proj_drop=proj_dropout)
+
+
+
+
+
+
 
         # ========= Masked MAE =========
         # variant masking ratio, a left-half truncated Gaussian centered at 100% masking ratio with std 0.25
@@ -200,7 +229,7 @@ class MAR(nn.Module):
         # ========= Encoder Blocks =========
         self.encoder_blocks = nn.ModuleList(
             [
-                HOTTransformerBlock(
+                Block(
                     encoder_embed_dim,
                     encoder_num_heads,
                     mlp_ratio,
@@ -208,7 +237,6 @@ class MAR(nn.Module):
                     norm_layer=norm_layer,
                     proj_drop=proj_dropout,
                     attn_drop=attn_dropout,
-                    use_hot=True
                 )
                 for _ in range(encoder_depth)
             ]
@@ -236,7 +264,7 @@ class MAR(nn.Module):
         # ========= Decoder Blocks =========
         self.decoder_blocks = nn.ModuleList(
             [
-                HOTTransformerBlock(
+                Block(
                     decoder_embed_dim,
                     decoder_num_heads,
                     mlp_ratio,
@@ -244,7 +272,6 @@ class MAR(nn.Module):
                     norm_layer=norm_layer,
                     proj_drop=proj_dropout,
                     attn_drop=attn_dropout,
-                    use_hot=True
                 )
                 for _ in range(decoder_depth)
             ]
@@ -695,11 +722,67 @@ class MAR(nn.Module):
         # 🟦 10. Transformer Encoder Blocks（可 checkpoint）
         # ---------------------------------------------------------------------
         if self.grad_checkpointing and not torch.jit.is_scripting():
-            for block in self.encoder_blocks:
+            for i, block in enumerate(self.encoder_blocks):
                 x = checkpoint(block, x)
         else:
-            for block in self.encoder_blocks:
-                x = block(x)
+            for i, block in enumerate(self.encoder_blocks):
+                x = block(x)  # batch token dim
+
+
+        """if i == self.layer_index:
+            x_knn = rearrange(x, 'b f n c -> b (f c) n')
+            x_knn = self.pool(x_knn)  # 全局平均池化: [b, f*c, n] -> [b, f*c, 1]
+            x_knn = rearrange(x_knn, 'b (f c) 1 -> b f c', f=f)  # [b, f, c]
+
+            # 聚类: 选择代表性的token
+            index, idx_cluster = cluster_dpc_knn(x_knn, self.token_num, 2)
+            index, _ = torch.sort(index)  # 排序索引
+
+            # 根据聚类结果选择token: [b, f, n, c] -> [b, token_num, n, c]
+            batch_ind = torch.arange(b, device=x.device).unsqueeze(-1)
+            x = x[batch_ind, index]
+
+            # 添加聚类token的位置编码
+            x = rearrange(x, 'b f n c -> (b n) f c')
+            x += self.pos_embed_token
+            x = rearrange(x, '(b n) f c -> b f n c', n=n)"""
+
+
+        if i == self.layer_index:
+            _, L, C = x.size()
+            self.original_token_num = L
+            # x: [b, L, c]
+            x_knn = x                      
+
+            index, idx_cluster = cluster_dpc_knn(
+                x_knn, 
+                self.token_num,
+                k=2
+            )
+            index, _ = torch.sort(index)
+
+            batch = torch.arange(B, device=x.device).unsqueeze(-1)
+            x = x[batch, index]               # [b, token_num, c]
+
+            x = x + self.pos_embed_token[:self.token_num]
+        
+        if i == self.encoder_depth - 1:
+            b, K, c = x.shape
+            # 1) 可学习 token 作为 Query 来恢复 token
+            #    x_token: [1, L, c] → expand 成 [b, L, c]
+            x_token = repeat(self.recover_token, '() L c -> b L c', b=b)
+
+            # 2) Cross Attention:
+            #    Query = 可学习 token（表示希望恢复哪些 token）
+            #    Key/Value = 聚类后的 token（表示保留的关键信息）
+            x_recover = x_token + self.cross_attention(
+                x_token,   # Q
+                x,         # K
+                x          # V
+            )              # -> [b, L, c]
+
+            x = x_recover
+
 
         # 最终编码后的序列
         x = self.encoder_norm(x)
@@ -1234,13 +1317,6 @@ class MAR(nn.Module):
 
                 # ========= Predict action and return if task_mode is inverse_model or policy_model=========
                 if task_mode == "inverse_model" or task_mode == "policy_model":
-                    if sampled_token_latent_act is None:
-                        # If predict_action is False, create a dummy action tensor
-                        # with the expected shape for the action dimension
-                        action_dim = self.diffactloss.target_channels if hasattr(self, 'diffactloss') else 7  # fallback to typical action dim
-                        sampled_token_latent_act = torch.zeros(
-                            bsz, self.n_frames, action_dim
-                        ).to(self.device)
                     return None, sampled_token_latent_act
 
                 # ========= Mask Ratio =========
