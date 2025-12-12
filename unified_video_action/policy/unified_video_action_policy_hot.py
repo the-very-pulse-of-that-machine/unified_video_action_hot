@@ -44,25 +44,8 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
         task_modes=[],
         **kwargs
     ):
-        """
-        初始化统一视频-动作策略模型。
-        该模型结合视觉自编码器、语言模型与自回归生成器，实现多模态的动作预测。
-
-        参数说明：
-            vae_model_params:   用于构造视觉 VAE 模型的配置。
-            autoregressive_model_params: 自回归主模型的配置。
-            action_model_params: 动作生成头的配置。
-            shape_meta:         输入输出的维度信息（如动作维度）。
-            n_action_steps:     每次预测输出的动作步数。
-            shift_action:       是否在训练时使用动作偏移。
-            language_emb_model: 语言嵌入模型（如 clip）。
-            task_name:          当前任务名。
-            task_modes:         任务模式（视频建模、策略建模等）。
-            kwargs:             其他扩展参数，如是否使用历史动作、状态感知等。
-        """
         super().__init__()
 
-        # 保存任务相关配置
         self.task_name = task_name
         self.task_modes = task_modes
         self.autoregressive_model_params = autoregressive_model_params
@@ -71,30 +54,30 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
         self.language_emb_model = language_emb_model
         self.action_dim = shape_meta.action.shape[0]
 
-        # 保存常用参数
         self.kwargs = kwargs
         self.normalizer_type = kwargs["normalizer_type"]
         self.selected_training_mode = kwargs["selected_training_mode"]
+
         self.use_history_action = kwargs["use_history_action"]
         self.use_proprioception = kwargs["use_proprioception"]
 
-        # -------------------- 加载视觉自编码器 --------------------
+        ## =========================== load vae model ===========================
         with torch.no_grad():
             self.vae_model = AutoencoderKL(**vae_model_params)
         self.vae_model.eval()
         for param in self.vae_model.parameters():
-            param.requires_grad = False  # 冻结权重，仅用于特征提取
+            param.requires_grad = False
 
-        # -------------------- 加载语言模型（如 CLIP） --------------------
+        ## =========================== load language model ===========================
         self.text_model, self.tokenizer, self.max_length = get_text_model(
             task_name, language_emb_model
         )
         if self.text_model is not None:
             self.text_model.eval()
             for param in self.text_model.parameters():
-                param.requires_grad = False  # 冻结权重
+                param.requires_grad = False
 
-        # -------------------- 构建主自回归模型 --------------------
+        ## =========================== main model ===========================
         self.model = mar.__dict__[autoregressive_model_params.model_size](
             img_size=autoregressive_model_params.img_size,
             vae_stride=autoregressive_model_params.vae_stride,
@@ -126,21 +109,18 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
             shape_meta=shape_meta,
         )
 
-        # -------------------- 加载预训练模型权重 --------------------
+        ## =========================== load pretrained model ===========================
         self.pretrained_model_path = autoregressive_model_params.pretrained_model_path
         if self.pretrained_model_path is not None:
             if os.path.exists(self.pretrained_model_path):
                 self.load_pretrained_model()
             else:
                 print('pretrained model not found: ', self.pretrained_model_path)
-
-        # 初始化归一化器
+        
         self.normalizer = LinearNormalizer()
 
-        # -------------------- 设置训练模式 --------------------
         if self.selected_training_mode is None:
             if len(self.task_modes) == 0:
-                # 若未指定，则默认多任务训练
                 self.task_modes = [
                     "video_model",
                     "dynamic_model",
@@ -149,77 +129,68 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
                     "full_dynamic_model",
                 ]
         else:
-            # 选择特定模式组合
             if self.selected_training_mode == "policy_model_full_dynamics_model":
                 self.task_modes = ["policy_model", "full_dynamic_model"]
             else:
                 self.task_modes = [self.selected_training_mode]
-
         print("----------------------------------------------------------------------")
         print("task_modes", self.task_modes)
         print("----------------------------------------------------------------------")
 
-    # ================================================================
     def load_pretrained_model(self):
-        """
-        从预训练文件加载自回归模型的权重。
-        仅加载匹配形状的参数，其余参数保持初始化。
-        """
         print("----------------------------------------------------------------------")
         print("Loading pretrained model: ", self.pretrained_model_path)
         print("----------------------------------------------------------------------")
 
-        # 加载权重文件
         pretrained_diffusion_model_ckpt = torch.load(
             self.pretrained_model_path, map_location="cpu", weights_only=False
         )
 
-        # ---------- 情况一：包含 state_dicts ----------
         if "state_dicts" in pretrained_diffusion_model_ckpt:
             if "ema_model" in pretrained_diffusion_model_ckpt["state_dicts"]:
                 print("load from previous ema model")
-
-                # 提取并去掉前缀 "model."
+                ## load from previous checkpoint
                 pretrained_diffusion_model_ckpt_ = {
                     k[6:]: v
                     for k, v in pretrained_diffusion_model_ckpt["state_dicts"][
                         "ema_model"
                     ].items()
                     if k.startswith("model.")
-                }
+                }  # remove 'model.'
 
-                # 筛选形状匹配的键
                 model_state_dict = self.model.state_dict()
                 pretrained_state_dict = {
                     k: v
                     for k, v in pretrained_diffusion_model_ckpt_.items()
                     if k in model_state_dict and model_state_dict[k].size() == v.size()
                 }
-
-                # 打印不匹配的键
+                
                 pretrained_state_dict_mismatch = {
                     k: v
                     for k, v in model_state_dict.items()
                     if k not in pretrained_diffusion_model_ckpt_
                     or pretrained_diffusion_model_ckpt_[k].size() != v.size()
                 }
+                
                 print("----------------------------------------------------------------------")
                 print(
                     "pretrained_state_dict_mismatch: ",
                     pretrained_state_dict_mismatch.keys(),
                 )
                 print("----------------------------------------------------------------------")
-
-                # 合并并加载
+                
+                assert len(model_state_dict) > 0
+                assert len(pretrained_state_dict) > 0
                 model_state_dict.update(pretrained_state_dict)
+
                 missing_keys, unexpected_keys = self.model.load_state_dict(
                     model_state_dict, strict=False
                 )
             else:
                 raise NotImplementedError
 
-        # ---------- 情况二：包含 model_ema ----------
         elif "model_ema" in pretrained_diffusion_model_ckpt:
+            ## load from MAR pretrained mdoel
             pretrained_diffusion_model_ckpt_ = pretrained_diffusion_model_ckpt[
                 "model_ema"
             ]
@@ -230,8 +201,10 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
                 for k, v in pretrained_diffusion_model_ckpt_.items()
                 if k in model_state_dict and model_state_dict[k].size() == v.size()
             }
-
+            assert len(model_state_dict) > 0
+            assert len(pretrained_state_dict) > 0
             model_state_dict.update(pretrained_state_dict)
+
             missing_keys, unexpected_keys = self.model.load_state_dict(
                 model_state_dict, strict=False
             )
@@ -244,34 +217,27 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
         print("Model Unexpected keys:", unexpected_keys)
         print("---------------------------------------------------------------")
 
-    # ================================================================
+
     def predict_action(
         self, obs_dict: Dict[str, torch.Tensor], language_goal=None
     ) -> Dict[str, torch.Tensor]:
         """
-        推理阶段：根据当前观测（图像+语言）预测下一步动作。
-        返回反归一化后的实际动作值。
-
-        输入：
-            obs_dict: 包含图像和可选的历史动作等信息。
-            language_goal: 任务语言描述（或已编码向量）。
-        输出：
-            dict 包含预测动作序列。
+        obs_dict: must include "obs" key
+        result: must include "action" key
         """
-        # 图像尺寸标准化
+        
         obs_dict = resize_image_eval(self.task_name, obs_dict)
         B, T, C, H, W = obs_dict["image"].shape
 
-        # ---------- 语言特征提取 ----------
+        ## language goal
         text_latents = None
         if self.language_emb_model is not None:
             if "umi" in self.task_name:
-                text_latents = language_goal  # 某些任务直接传入已编码语言
+                text_latents = language_goal
             else:
                 print("predict_action language_goal: ", language_goal)
                 print(self.task_name, "max_length", self.max_length)
 
-                # 使用 tokenizer + 文本模型提取语义向量
                 if self.language_emb_model == "clip":
                     text_tokens = self.tokenizer(
                         language_goal,
@@ -284,8 +250,10 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
                         text_tokens,
                         language_emb_model=self.language_emb_model,
                     )
+                else:
+                    text_latents = None
 
-        # ---------- 历史动作处理 ----------
+        ## history action
         history_nactions = None
         if self.use_history_action:
             if "past_action" in obs_dict:
@@ -296,7 +264,7 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
                 )
                 del obs_dict["past_action"]
 
-        # ---------- 观测归一化 ----------
+        ## normalize observations
         batch = normalize_obs(
             normalizer=self.normalizer,
             normalizer_type=self.normalizer_type,
@@ -304,12 +272,10 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
         )
         obs_dict = batch["obs"]
 
-        # ---------- 生成模型输入 ----------
         c, proprioception_input, _ = process_data(
             {"obs": obs_dict}, task_name=self.task_name, eval=True, **self.kwargs
         )
 
-        # ---------- 感知数据处理 ----------
         if self.use_proprioception:
             if "second_image" in proprioception_input:
                 second_image_z, _ = extract_latent_autoregressive(
@@ -317,10 +283,8 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
                 )
                 proprioception_input["second_image_z"] = second_image_z
 
-        # ---------- 提取视觉潜变量 ----------
         c, latent_size = extract_latent_autoregressive(self.vae_model, c.detach())
 
-        # ---------- 自回归采样生成动作 ----------
         z, act_out = self.model.sample_tokens(
             bsz=B,
             cond=c,
@@ -335,42 +299,42 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
             vae_model=self.vae_model,
         )
 
-        # ---------- 反归一化输出动作 ----------
+        # unnormalize prediction
         Da = self.action_dim
+
+        #print("z:", z)
+        #print("act_out:", act_out)
+        #assert act_out is not None, "act_out is None! Check inputs to sample_tokens."
         naction_pred = act_out[..., :Da]
+
+        ## unnormalize action
         action_pred = unnormalize_future_action(
             normalizer=self.normalizer,
             normalizer_type=self.normalizer_type,
             actions=naction_pred,
         )
+
         action = action_pred[:, : self.n_action_steps]
 
-        # ---------- 返回结果 ----------
         result = {
             "action": action,
             "action_pred": action_pred,
         }
         return result
 
-    # ================================================================
+    # ========= training  ============
     def set_normalizer(self, normalizer: LinearNormalizer):
-        """加载外部归一化器状态。"""
         self.normalizer.load_state_dict(normalizer.state_dict())
 
-    # ================================================================
     def add_weight_decay(self, model, weight_decay=1e-5, skip_list=()):
-        """
-        根据参数类型添加权重衰减策略。
-        对偏置项和归一化参数不施加权重衰减。
-        """
         decay = []
         no_decay = []
 
         for name, param in model.named_parameters():
             if not param.requires_grad:
-                continue
+                continue  # frozen weights
             if len(param.shape) == 1 or name.endswith(".bias") or name in skip_list:
-                no_decay.append(param)
+                no_decay.append(param)  # no weight decay on bias, norm and diffloss
             else:
                 decay.append(param)
 
@@ -379,33 +343,28 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
             {"params": decay, "weight_decay": weight_decay},
         ]
 
-    # ================================================================
     def get_optimizer(
         self,
         weight_decay: float,
         learning_rate: float,
         betas: Tuple[float, float],
     ) -> torch.optim.Optimizer:
-        """
-        构造 AdamW 优化器，并为每个参数组设置初始学习率。
-        """
+
         optim_groups = self.add_weight_decay(self.model, weight_decay=weight_decay)
         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
 
+        # Manually set 'initial_lr' for each parameter group (assuming a base learning rate)
         for param_group in optimizer.param_groups:
             if "initial_lr" not in param_group:
-                param_group["initial_lr"] = param_group["lr"]
+                param_group["initial_lr"] = param_group[
+                    "lr"
+                ]  # or set a specific initial learning rate
 
         return optimizer
 
-    # ================================================================
     def compute_loss(self, batch, **kwargs):
-        """
-        计算训练损失，包括视频重建与动作预测两部分。
-        """
         B, T, C, H, W = batch["obs"]["image"].size()
 
-        # ---------- 提取语言向量 ----------
         text_latents = None
         if self.language_emb_model == "clip":
             if "language" in batch["obs"]:
@@ -425,7 +384,6 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
             else:
                 raise NotImplementedError
 
-        # ---------- 归一化动作与观测 ----------
         nactions = normalize_action(
             normalizer=self.normalizer,
             normalizer_type=self.normalizer_type,
@@ -437,27 +395,21 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
             batch=batch,
         )
 
-        # ---------- 若使用历史动作，裁剪时间序列 ----------
         if self.use_history_action:
             batch = dict_apply(batch, lambda x: x[:, 1:])
 
-        # ---------- 处理视觉输入 ----------
         x, proprioception_input, _ = process_data(
             batch, task_name=self.task_name, **self.kwargs
         )
         x, z, c, _, proprioception_input = get_vae_latent(
             x, self.vae_model, eval=False, proprioception_input=proprioception_input
         )
-
-        # ---------- 生成动作轨迹 ----------
         history_trajectory, trajectory = get_trajectory(
             nactions, T, self.shift_action, use_history_action=self.use_history_action
         )
 
-        # ---------- 随机选择训练模式 ----------
         selected_mode = random.choice(self.task_modes)
 
-        # ---------- 前向计算损失 ----------
         loss, video_loss, act_loss = self.model(
             z,
             c,
@@ -468,14 +420,13 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
             proprioception_input=proprioception_input,
         )
 
-        # ---------- 确保所有参数都参与计算图 ----------
+        ## not recommended, fix the problem in DDM unused parameters
         for param in self.model.parameters():
-            if param.grad is None:
+            if param.grad is None:  # Likely unused in loss computation
                 loss += 0 * param.sum()
 
         return loss, (video_loss, act_loss)
 
-    # ================================================================
     def forward(self, batch, **kwargs):
-        """前向接口，训练阶段调用 compute_loss。"""
         return self.compute_loss(batch, **kwargs)
+

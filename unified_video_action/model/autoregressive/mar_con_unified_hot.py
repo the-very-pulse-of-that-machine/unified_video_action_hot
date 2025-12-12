@@ -728,60 +728,45 @@ class MAR(nn.Module):
             for i, block in enumerate(self.encoder_blocks):
                 x = block(x)  # batch token dim
 
+                #print(i)
+                #print(x.size())
+                if i == self.layer_index:
+                    #print("hot")
+                    _, L, C = x.size()
+                    self.original_token_num = L
+                    # x: [b, L, c]
+                    x_knn = x                      
 
-        """if i == self.layer_index:
-            x_knn = rearrange(x, 'b f n c -> b (f c) n')
-            x_knn = self.pool(x_knn)  # 全局平均池化: [b, f*c, n] -> [b, f*c, 1]
-            x_knn = rearrange(x_knn, 'b (f c) 1 -> b f c', f=f)  # [b, f, c]
+                    index, idx_cluster = cluster_dpc_knn(
+                        x_knn, 
+                        self.token_num,
+                        k=2
+                    )
+                    index, _ = torch.sort(index)
 
-            # 聚类: 选择代表性的token
-            index, idx_cluster = cluster_dpc_knn(x_knn, self.token_num, 2)
-            index, _ = torch.sort(index)  # 排序索引
+                    batch = torch.arange(B, device=x.device).unsqueeze(-1)
+                    x = x[batch, index]               # [b, token_num, c]
 
-            # 根据聚类结果选择token: [b, f, n, c] -> [b, token_num, n, c]
-            batch_ind = torch.arange(b, device=x.device).unsqueeze(-1)
-            x = x[batch_ind, index]
+                    x = x + self.pos_embed_token[:self.token_num]
+                
+                if i == self.encoder_depth - 1:
+                    b, K, c = x.shape
+                    #print("recover")
+                    # 1) 可学习 token 作为 Query 来恢复 token
+                    #    x_token: [1, L, c] → expand 成 [b, L, c]
+                    x_token = repeat(self.recover_token, '() L c -> b L c', b=b)
 
-            # 添加聚类token的位置编码
-            x = rearrange(x, 'b f n c -> (b n) f c')
-            x += self.pos_embed_token
-            x = rearrange(x, '(b n) f c -> b f n c', n=n)"""
+                    # 2) Cross Attention:
+                    #    Query = 可学习 token（表示希望恢复哪些 token）
+                    #    Key/Value = 聚类后的 token（表示保留的关键信息）
+                    x_recover = x_token + self.cross_attention(
+                        x_token,   # Q
+                        x,         # K
+                        x          # V
+                    )              # -> [b, L, c]
 
-
-        if i == self.layer_index:
-            _, L, C = x.size()
-            self.original_token_num = L
-            # x: [b, L, c]
-            x_knn = x                      
-
-            index, idx_cluster = cluster_dpc_knn(
-                x_knn, 
-                self.token_num,
-                k=2
-            )
-            index, _ = torch.sort(index)
-
-            batch = torch.arange(B, device=x.device).unsqueeze(-1)
-            x = x[batch, index]               # [b, token_num, c]
-
-            x = x + self.pos_embed_token[:self.token_num]
-        
-        if i == self.encoder_depth - 1:
-            b, K, c = x.shape
-            # 1) 可学习 token 作为 Query 来恢复 token
-            #    x_token: [1, L, c] → expand 成 [b, L, c]
-            x_token = repeat(self.recover_token, '() L c -> b L c', b=b)
-
-            # 2) Cross Attention:
-            #    Query = 可学习 token（表示希望恢复哪些 token）
-            #    Key/Value = 聚类后的 token（表示保留的关键信息）
-            x_recover = x_token + self.cross_attention(
-                x_token,   # Q
-                x,         # K
-                x          # V
-            )              # -> [b, L, c]
-
-            x = x_recover
+                    x = x_recover
+                    #print(x.size())
 
 
         # 最终编码后的序列
@@ -1505,3 +1490,4 @@ def mar_huge(**kwargs):
         **kwargs
     )
     return model
+

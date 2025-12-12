@@ -1,0 +1,16 @@
+accelerate launch --num_processes=1 train.py     --config-dir=.     --config-name=uva_hot_pusht.yaml     model.policy.action_model_params.predict_action=False     model.policy.selected_training_mode=video_model     model.policy.optimizer.learning_rate=1e-4     logging.project=uva     hydra.run.dir="checkpoints/uva_pusht_video_model"
+
+
+
+  accelerate launch --num_processes=1 train.py \
+    --config-dir=. \
+    --config-name=uva_hot_pusht.yaml \
+    model.policy.autoregressive_model_params.pretrained_model_path=checkpoints/test2/checkpoints/latest.ckpt \
+    model.policy.action_model_params.predict_action=True
+    model.policy.optimizer.learning_rate=1e-4 \
+    logging.project=uva \
+    hydra.run.dir="checkpoints/test_act1"
+
+
+
+python eval_sim.py --checkpoint checkpoints/uva_hot_pusht_video_model/checkpoints/latest.ckpt --output_dir checkpoints/pusht
