@@ -832,8 +832,6 @@ class MAR(nn.Module):
         else:
             for i, block in enumerate(self.decoder_blocks):
                 x = block(x)
-                print(x.shape)
-
 
                 if i == self.encoder_depth - 1:
                     b, K, c = x.shape
