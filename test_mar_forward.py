@@ -10,7 +10,7 @@ from functools import partial
 from einops import rearrange
 
 # 导入MAR模型
-from unified_video_action.model.autoregressive.mar_con_unified_hot import mar_tiny
+from unified_video_action.model.autoregressive.mar_con_unified_expand_hot import mar_base
 
 def test_forward_simple():
     """简单测试MAR模型的前向传播"""
@@ -38,7 +38,7 @@ def test_forward_simple():
     }
     
     # 创建小模型用于测试
-    model = mar_tiny(
+    model = mar_base(
         img_size=256,
         vae_stride=16,
         patch_size=1,
@@ -160,7 +160,7 @@ def test_sample_tokens_simple():
         "language_emb_model": None
     }
     
-    model = mar_tiny(
+    model = mar_base(
         img_size=256,
         vae_stride=16,
         patch_size=1,

@@ -42,32 +42,41 @@ def get_two_level_module(name: str):
 
 
 def register_time_hooks(model):
-    """
-    为所有子模块注册前后 hook。
-    """
+    use_cuda = next(model.parameters()).is_cuda
+
     for name, module in model.named_modules():
         if name == "":
             continue
 
-        # 层名 + 二级模块名
         layer_name = name
         module_name = get_two_level_module(name)
 
         def _make_hook(layer_name, module_name):
             def pre_hook(m, inp):
-                m.__start_time = time.time()
+                if use_cuda:
+                    m.__start_event = torch.cuda.Event(enable_timing=True)
+                    m.__end_event = torch.cuda.Event(enable_timing=True)
+                    m.__start_event.record()
+                else:
+                    m.__start_time = time.time()
 
             def fwd_hook(m, inp, out):
-                elapsed = (time.time() - m.__start_time) * 1000
+                if use_cuda:
+                    m.__end_event.record()
+                    torch.cuda.synchronize()
+                    elapsed = m.__start_event.elapsed_time(m.__end_event)  # ms
+                else:
+                    elapsed = (time.time() - m.__start_time) * 1000
 
-                LAYER_TIME.setdefault(layer_name, []).append(elapsed)
-                MODULE_TIME.setdefault(module_name, []).append(elapsed)
+                LAYER_TIME.setdefault(layer_name, []).append(float(elapsed))
+                MODULE_TIME.setdefault(module_name, []).append(float(elapsed))
 
             return pre_hook, fwd_hook
 
         pre_hook, fwd_hook = _make_hook(layer_name, module_name)
         module.register_forward_pre_hook(pre_hook)
         module.register_forward_hook(fwd_hook)
+
 
 
 # ===============================
