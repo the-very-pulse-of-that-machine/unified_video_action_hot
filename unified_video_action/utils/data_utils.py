@@ -222,6 +222,15 @@ def process_data(batch, task_name="", eval=False, **kwargs):
             x, T, eval=eval, different_history_freq=kwargs["different_history_freq"]
         )
 
+    if 1:
+        with open("video.txt", "w") as f:
+            if isinstance(x, torch.Tensor):
+                index_list = x.cpu().numpy().tolist()
+                print(" ".join(map(str, index_list)), file=f)
+            else:
+                print(x, file=f)
+
+
     ## normalize image
     x = rearrange(x / 127.5 - 1, "b t c h w -> b c t h w")
 
