@@ -745,6 +745,15 @@ class MAR(nn.Module):
                     )
                     index, _ = torch.sort(index)
 
+                    print_token_index = True
+                    if print_token_index:
+                        with open("select_token.txt", "w") as f:
+                            if isinstance(index, torch.Tensor):
+                                index_list = index.cpu().numpy().tolist()
+                                print(" ".join(map(str, index_list)), file=f)
+                            else:
+                                print(index, file=f)
+                                
                     batch = torch.arange(B, device=x.device).unsqueeze(-1)
                     x = x[batch, index]               # [b, token_num, c]
                     self.selected_token_index = index
