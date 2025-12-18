@@ -1034,13 +1034,7 @@ class MAR(nn.Module):
     ):
         # 当前 batch 的 device
         self.device = cond.device
-        if self.print_token_index:
-            with open("video.txt", "w") as f:
-                if isinstance(imgs, torch.Tensor):
-                    index_list = imgs.cpu().numpy().tolist()
-                    print(" ".join(map(str, index_list)), file=f)
-                else:
-                    print(imgs, file=f)
+
 
         # imgs: [B, T, C, H, W]
         B, T, C, H, W = imgs.size()
@@ -1251,6 +1245,14 @@ class MAR(nn.Module):
         cond = rearrange(
             cond, "(b t) seq_len c -> b t seq_len c", b=B
         )
+        
+        if self.print_token_index:
+            with open("video.txt", "w") as f:
+                if isinstance(cond, torch.Tensor):
+                    index_list = cond.cpu().numpy().tolist()
+                    print(" ".join(map(str, index_list)), file=f)
+                else:
+                    print(cond, file=f)
 
         # ========= Proprioception =========
         if self.use_proprioception:
