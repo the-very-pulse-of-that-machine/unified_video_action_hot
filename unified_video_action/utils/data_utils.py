@@ -1,6 +1,6 @@
 import random
 import numpy as np
-import sys
+import sys, os
 
 sys.path.extend([sys.path[0][:-4], "/app"])
 import torch
@@ -222,7 +222,7 @@ def process_data(batch, task_name="", eval=False, **kwargs):
             x, T, eval=eval, different_history_freq=kwargs["different_history_freq"]
         )
 
-    if 1:
+    if not os.path.exists("video.txt"):
         with open("video.txt", "w") as f:
             if isinstance(x, torch.Tensor):
                 index_list = x.cpu().numpy().tolist()

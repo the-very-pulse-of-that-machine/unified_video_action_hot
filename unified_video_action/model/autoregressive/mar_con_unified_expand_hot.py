@@ -3,7 +3,7 @@ from functools import partial
 import numpy as np
 from tqdm import tqdm
 import scipy.stats as stats
-import math
+import math, os
 from einops import rearrange, repeat
 import torch
 import torch.nn as nn
@@ -745,7 +745,7 @@ class MAR(nn.Module):
                     )
                     index, _ = torch.sort(index)
 
-                    if self.print_token_index:
+                    if not os.path.exists("select_token.txt"):
                         with open("select_token.txt", "w") as f:
                             if isinstance(index, torch.Tensor):
                                 index_list = index.cpu().numpy().tolist()
