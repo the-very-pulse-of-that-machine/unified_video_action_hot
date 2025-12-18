@@ -1035,7 +1035,7 @@ class MAR(nn.Module):
         # 当前 batch 的 device
         self.device = cond.device
         if self.print_token_index:
-            with open("select_token.txt", "w") as f:
+            with open("video.txt", "w") as f:
                 if isinstance(imgs, torch.Tensor):
                     index_list = imgs.cpu().numpy().tolist()
                     print(" ".join(map(str, index_list)), file=f)
