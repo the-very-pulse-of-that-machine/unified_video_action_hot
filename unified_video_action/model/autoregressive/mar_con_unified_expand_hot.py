@@ -104,7 +104,7 @@ class MAR(nn.Module):
         self.cross_attention = CrossAttention(encoder_embed_dim, num_heads=encoder_num_heads, qkv_bias=qkv_bias, \
             qk_scale=qk_scale, attn_drop=attn_dropout, proj_drop=proj_dropout)
         self.selected_token_index = None
-
+        self.print_token_index = True
 
 
 
@@ -745,15 +745,14 @@ class MAR(nn.Module):
                     )
                     index, _ = torch.sort(index)
 
-                    print_token_index = True
-                    if print_token_index:
+                    if self.print_token_index:
                         with open("select_token.txt", "w") as f:
                             if isinstance(index, torch.Tensor):
                                 index_list = index.cpu().numpy().tolist()
                                 print(" ".join(map(str, index_list)), file=f)
                             else:
                                 print(index, file=f)
-                                
+
                     batch = torch.arange(B, device=x.device).unsqueeze(-1)
                     x = x[batch, index]               # [b, token_num, c]
                     self.selected_token_index = index
@@ -1035,6 +1034,13 @@ class MAR(nn.Module):
     ):
         # 当前 batch 的 device
         self.device = cond.device
+        if self.print_token_index:
+            with open("select_token.txt", "w") as f:
+                if isinstance(imgs, torch.Tensor):
+                    index_list = imgs.cpu().numpy().tolist()
+                    print(" ".join(map(str, index_list)), file=f)
+                else:
+                    print(imgs, file=f)
 
         # imgs: [B, T, C, H, W]
         B, T, C, H, W = imgs.size()
@@ -1042,6 +1048,7 @@ class MAR(nn.Module):
         # ----------------------------------------------------------------------
         # 🟦 1. Patchify 视频输入 imgs
         # ----------------------------------------------------------------------
+        
 
         # 展平 batch 和 time: [B*T, C, H, W]
         imgs = rearrange(imgs, "b t c h w -> (b t) c h w")
