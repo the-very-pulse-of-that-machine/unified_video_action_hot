@@ -13,4 +13,6 @@ accelerate launch --num_processes=1 train.py     --config-dir=.     --config-nam
 
 
 
-python eval_sim.py --checkpoint checkpoints/uva_hot_pusht_video_model/checkpoints/latest.ckpt --output_dir checkpoints/pusht
+python eval_sim.py --checkpoint checkpoints/uva_hot_pusht_video_model/checkpoints/latest.ckpt --output_dir checkpoints/pusht 
+
+python eval_sim_time_full.py --checkpoint checkpoints/pusht.ckpt --output_dir checkpoints/pusht  --dataset_path data/pusht/pusht_one_episode.zarr

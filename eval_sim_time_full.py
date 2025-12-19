@@ -87,7 +87,8 @@ def register_time_hooks(model):
 @click.option("-c", "--checkpoint", required=True)
 @click.option("-o", "--output_dir", required=True)
 @click.option("-d", "--device", default="cuda:0")
-def main(checkpoint, output_dir, device):
+@click.option("--dataset_path", required=False)
+def main(checkpoint, output_dir, device, dataset_path):
 
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -101,6 +102,8 @@ def main(checkpoint, output_dir, device):
 
     with open_dict(cfg):
         cfg.output_dir = output_dir
+        if dataset_path is not None:
+            cfg.task.dataset.dataset_path = dataset_path
 
     cls = hydra.utils.get_class(cfg.model._target_)
     workspace = cls(cfg, output_dir=output_dir)
