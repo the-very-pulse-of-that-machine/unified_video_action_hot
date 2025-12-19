@@ -53,31 +53,42 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, max_save_steps):
     policy.to(device)
     policy.eval()
 
-    env_runners = load_env_runner(cfg, output_dir)
-    env_runner = env_runners
+    env_runner = load_env_runner(cfg, output_dir)
 
     model = policy.model
 
-    # ===============================
+    # =====================================================
     # Data buffer
-    # ===============================
+    # =====================================================
     saved_data = {
-        "images": [],
-        "selected_token_indices": [],
-        "patch_size": None,
-        "image_shape": None,
+        "raw_images": [],                 # ✅ 原始图像 (B,T,3,H,W)
+        "selected_token_indices": [],     # token index
         "step_count": 0,
     }
 
-    # patch size
-    if hasattr(model, "patch_size"):
-        saved_data["patch_size"] = model.patch_size
-    elif hasattr(model, "vae_model") and hasattr(model.vae_model, "patch_size"):
-        saved_data["patch_size"] = model.vae_model.patch_size
+    # =====================================================
+    # Hook 1: policy.forward —— 存原图
+    # =====================================================
+    original_policy_forward = policy.forward
 
-    # ===============================
-    # Hook MAE encoder
-    # ===============================
+    def wrapped_policy_forward(*args, **kwargs):
+        """
+        policy.forward(obs, ...)
+        obs["image"] : (B,T,3,H,W)
+        """
+        if saved_data["step_count"] < max_save_steps:
+            obs = args[0]
+            if isinstance(obs, dict) and "image" in obs:
+                saved_data["raw_images"].append(
+                    obs["image"].detach().cpu().numpy()
+                )
+        return original_policy_forward(*args, **kwargs)
+
+    policy.forward = wrapped_policy_forward
+
+    # =====================================================
+    # Hook 2: MAE encoder —— 存 token index
+    # =====================================================
     original_forward_mae_encoder = model.forward_mae_encoder
 
     def wrapped_forward_mae_encoder(
@@ -88,14 +99,6 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, max_save_steps):
         task_mode=None,
         proprioception_input={}
     ):
-        if saved_data["step_count"] < max_save_steps:
-            if saved_data["image_shape"] is None:
-                saved_data["image_shape"] = tuple(x.shape)
-
-            saved_data["images"].append(
-                x.detach().cpu().numpy()
-            )
-
         out = original_forward_mae_encoder(
             x, mask, cond,
             text_latents,
@@ -108,7 +111,7 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, max_save_steps):
         if (
             hasattr(model, "selected_token_index")
             and model.selected_token_index is not None
-            and len(saved_data["selected_token_indices"]) < max_save_steps
+            and saved_data["step_count"] < max_save_steps
         ):
             saved_data["selected_token_indices"].append(
                 model.selected_token_index.detach().cpu().numpy()
@@ -119,26 +122,26 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, max_save_steps):
 
     model.forward_mae_encoder = wrapped_forward_mae_encoder
 
-    # ===============================
-    # Run one episode
-    # ===============================
-    print("[Run] Collecting data...")
+    # =====================================================
+    # Run
+    # =====================================================
+    print("[Run] Collecting raw images + token indices...")
     env_runner.run(policy)
 
     # restore
+    policy.forward = original_policy_forward
     model.forward_mae_encoder = original_forward_mae_encoder
 
-    # ===============================
+    # =====================================================
     # Save
-    # ===============================
+    # =====================================================
     out_path = os.path.join(output_dir, "saved_data.pkl")
     with open(out_path, "wb") as f:
         pickle.dump(saved_data, f)
 
     print(f"[Saved] → {out_path}")
     print(f"Steps saved: {saved_data['step_count']}")
-    print(f"Patch size: {saved_data['patch_size']}")
-    print(f"Image shape: {saved_data['image_shape']}")
+    print(f"Raw image shape example: {saved_data['raw_images'][0].shape}")
 
 
 if __name__ == "__main__":
