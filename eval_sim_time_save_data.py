@@ -166,32 +166,38 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, n_test_vis, n_tra
             
             # 用于保存数据的列表
             saved_data = {
-                'image_data': [],  # 保存输入模型的原始图像数据
-                'cond_image_data': [],  # 保存条件图像数据
+                'sample_tokens_cond': [],  # 只保存sample_tokens中的cond数据
                 'selected_token_indices': [],  # 保存select token index
-                'actions': [],  # 保存动作数据
-                'timesteps': [],  # 保存时间步
                 'step_count': 0  # 记录当前保存的step数
             }
             
-            # 添加hook来捕获select token index和输入数据
+            # 添加hook来捕获sample_tokens方法中的cond数据
+            if hasattr(model, 'sample_tokens'):
+                original_sample_tokens = model.sample_tokens
+                
+                def wrapped_sample_tokens(bsz, cond, text_latents=None, num_iter=64, cfg=1.0, 
+                                         cfg_schedule="linear", temperature=1.0, progress=False,
+                                         history_nactions=None, nactions=None, proprioception_input={},
+                                         task_mode=None, vae_model=None, x=None):
+                    # 保存sample_tokens中的cond数据
+                    if saved_data['step_count'] < max_save_steps:
+                        cond_np = cond.detach().cpu().numpy()
+                        saved_data['sample_tokens_cond'].append(cond_np)
+                        saved_data['step_count'] += 1
+                    
+                    # 调用原始sample_tokens方法
+                    return original_sample_tokens(bsz, cond, text_latents, num_iter, cfg, cfg_schedule,
+                                                 temperature, progress, history_nactions, nactions,
+                                                 proprioception_input, task_mode, vae_model, x)
+                
+                # 临时替换sample_tokens方法
+                model.sample_tokens = wrapped_sample_tokens
+            
+            # 添加hook来捕获select token index
             original_forward_mae_encoder = model.forward_mae_encoder
             
             def wrapped_forward_mae_encoder(x, mask, cond, text_latents=None, history_nactions=None, 
                                            nactions=None, task_mode=None, proprioception_input={}):
-                # 保存输入图像数据（如果还有空间）
-                if saved_data['step_count'] < max_save_steps:
-                    # 保存输入图像x（原始图像数据）
-                    # x shape: [B, T, S, C] 其中T是帧数，S是patch数，C是通道数
-                    x_np = x.detach().cpu().numpy()
-                    saved_data['image_data'].append(x_np)
-                    
-                    # 保存条件图像cond
-                    cond_np = cond.detach().cpu().numpy()
-                    saved_data['cond_image_data'].append(cond_np)
-                    
-                    saved_data['step_count'] += 1
-                
                 result = original_forward_mae_encoder(x, mask, cond, text_latents, history_nactions, 
                                                      nactions, task_mode, proprioception_input)
                 # 保存select token index
@@ -208,12 +214,12 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, n_test_vis, n_tra
             
             # 恢复原始方法
             model.forward_mae_encoder = original_forward_mae_encoder
+            if hasattr(model, 'sample_tokens'):
+                model.sample_tokens = original_sample_tokens
             
             # 限制保存的数据量
-            if len(saved_data['image_data']) > max_save_steps:
-                saved_data['image_data'] = saved_data['image_data'][:max_save_steps]
-            if len(saved_data['cond_image_data']) > max_save_steps:
-                saved_data['cond_image_data'] = saved_data['cond_image_data'][:max_save_steps]
+            if len(saved_data['sample_tokens_cond']) > max_save_steps:
+                saved_data['sample_tokens_cond'] = saved_data['sample_tokens_cond'][:max_save_steps]
             if len(saved_data['selected_token_indices']) > max_save_steps:
                 saved_data['selected_token_indices'] = saved_data['selected_token_indices'][:max_save_steps]
             
@@ -221,9 +227,14 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, n_test_vis, n_tra
             data_path = os.path.join(output_dir, "saved_data.pkl")
             with open(data_path, 'wb') as f:
                 pickle.dump(saved_data, f)
-            print(f"[Data] Saved image and token data → {data_path}")
+            print(f"[Data] Saved data → {data_path}")
             
             # 打印数据统计
+            print(f"[Data] Collected {len(saved_data['sample_tokens_cond'])} sample_tokens cond data")
+            if saved_data['sample_tokens_cond']:
+                first_cond = saved_data['sample_tokens_cond'][0]
+                print(f"[Data] First sample_tokens cond shape: {first_cond.shape}")
+            
             if saved_data['selected_token_indices']:
                 print(f"[Data] Collected {len(saved_data['selected_token_indices'])} select token index sets")
                 # 打印第一个batch的select token index
