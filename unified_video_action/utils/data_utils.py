@@ -222,6 +222,7 @@ def process_data(batch, task_name="", eval=False, **kwargs):
             x, T, eval=eval, different_history_freq=kwargs["different_history_freq"]
         )
 
+
     if not os.path.exists("video.txt"):
         with open("video.txt", "w") as f:
             if isinstance(x, torch.Tensor):
