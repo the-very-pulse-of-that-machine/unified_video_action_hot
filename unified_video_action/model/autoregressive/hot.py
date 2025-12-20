@@ -46,7 +46,9 @@ def cluster_dpc_knn(x, cluster_num, k, token_mask=None):
 
         # 计算得分并选择聚类中心
         score = dist * density
-        _, index_down = torch.topk(score, k=cluster_num, dim=-1)
+        
+        #_, index_down = torch.topk(score, k=cluster_num, dim=-1)
+        _, index_down = torch.topk(1/score, k=cluster_num, dim=-1)
 
         # 分配聚类标签
         dist_matrix = index_points(dist_matrix, index_down)

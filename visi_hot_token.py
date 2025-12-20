@@ -554,6 +554,6 @@ def visualize_all_steps_and_aggregate(pkl_path="1.pkl",
 if __name__ == "__main__":
     results = visualize_all_steps_and_aggregate(
         pkl_path="1.pkl",
-        step_output_dir="step_visualizations",
+        step_output_dir="output/step_visualizations",
         max_steps_to_visualize=10  # Visualize first 10 steps only
     )
