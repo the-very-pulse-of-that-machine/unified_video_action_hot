@@ -67,28 +67,30 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, max_save_steps):
     }
 
     # =====================================================
-    # Hook 1: policy.forward —— 存归一化后的图像数据（prepare_data_predict_action 输入的 x）
+    # Hook 1: policy.predict_action —— 存归一化后的图像数据（prepare_data_predict_action 输入的 x）
     # =====================================================
-    original_policy_forward = policy.forward
+    original_predict_action = policy.predict_action
 
-    def wrapped_policy_forward(*args, **kwargs):
+    def wrapped_predict_action(*args, **kwargs):
         """
-        policy.forward(obs, ...)
-        obs["image"] : (B,T,3,H,W)
+        policy.predict_action(obs_dict, ...)
+        obs_dict["image"] : (B,T,3,H,W)
         """
-        if saved_data["step_count"] < max_save_steps:
-            x = args[0]
-            if isinstance(x, dict) and "obs" in x and "image" in x["obs"]:
+        # 总是尝试保存图像，但限制总数不超过 max_save_steps
+        if len(saved_data["raw_images"]) < max_save_steps:
+            obs_dict = args[0]
+            if isinstance(obs_dict, dict) and "image" in obs_dict:
                 # 获取原始图像数据 (0-255范围)
-                raw_image = x["obs"]["image"]
+                raw_image = obs_dict["image"]
+                #print(raw_image)
                 # 进行归一化：/ 127.5 - 1，与 prepare_data_predict_action 中的处理一致
-                normalized_image = raw_image / 127.5 - 1.0
+                #normalized_image = raw_image / 127.5 - 1.0
                 saved_data["raw_images"].append(
-                    normalized_image.detach().cpu().numpy()
+                    raw_image.detach().cpu().numpy()
                 )
-        return original_policy_forward(*args, **kwargs)
+        return original_predict_action(*args, **kwargs)
 
-    policy.forward = wrapped_policy_forward
+    policy.predict_action = wrapped_predict_action
 
     # =====================================================
     # Hook 2: MAE encoder —— 存 token index
@@ -133,7 +135,7 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, max_save_steps):
     env_runner.run(policy)
 
     # restore
-    policy.forward = original_policy_forward
+    policy.predict_action = original_predict_action
     model.forward_mae_encoder = original_forward_mae_encoder
 
     # =====================================================
