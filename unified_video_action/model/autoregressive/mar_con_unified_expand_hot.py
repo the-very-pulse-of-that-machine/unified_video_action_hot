@@ -104,6 +104,7 @@ class MAR(nn.Module):
         self.cross_attention = CrossAttention(encoder_embed_dim, num_heads=encoder_num_heads, qkv_bias=qkv_bias, \
             qk_scale=qk_scale, attn_drop=attn_dropout, proj_drop=proj_dropout)
         self.selected_token_index = None
+        self.hot_input_token = None
         self.print_token_index = True
 
 
@@ -737,6 +738,7 @@ class MAR(nn.Module):
                     self.original_token_num = L
                     # x: [b, L, c]
                     x_knn = x                      
+                    self.hot_input_token = x
 
                     index, idx_cluster = cluster_dpc_knn(
                         x_knn, 
@@ -744,14 +746,6 @@ class MAR(nn.Module):
                         k=2
                     )
                     index, _ = torch.sort(index)
-
-                    if not os.path.exists("select_token.txt"):
-                        with open("select_token.txt", "w") as f:
-                            if isinstance(index, torch.Tensor):
-                                index_list = index.cpu().numpy().tolist()
-                                print(" ".join(map(str, index_list)), file=f)
-                            else:
-                                print(index, file=f)
 
                     batch = torch.arange(B, device=x.device).unsqueeze(-1)
                     x = x[batch, index]               # [b, token_num, c]

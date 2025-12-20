@@ -63,6 +63,7 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, max_save_steps):
     saved_data = {
         "raw_images": [],                 # ✅ 原始图像 (B,T,3,H,W)
         "selected_token_indices": [],     # token index
+        "raw_hot_input_token": [],
         "step_count": 0,
     }
 
@@ -122,7 +123,11 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, max_save_steps):
             saved_data["selected_token_indices"].append(
                 model.selected_token_index.detach().cpu().numpy()
             )
+            saved_data["raw_hot_input_token"].append(
+                model.hot_input_token.detach().cpu().numpy()
+            )
             saved_data["step_count"] += 1
+            
 
         return out
 
