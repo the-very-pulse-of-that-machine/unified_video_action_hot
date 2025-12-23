@@ -8,6 +8,8 @@ vis*/
 *.gif
 *.png
 *.jpg
+*.pkl
+
 debug/
 outputs/
 data/
