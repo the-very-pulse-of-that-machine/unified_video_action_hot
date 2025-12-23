@@ -56,7 +56,7 @@ def cluster_dpc_knn(x, cluster_num, k=5, token_mask=None):
 
         # 计算得分并选择聚类中心
         score = dist * density
-        _, index_down = torch.topk(score, k=cluster_num, dim=-1)
+        _, index_down = torch.topk(1/score, k=cluster_num, dim=-1)
 
         # 分配聚类标签
         dist_matrix = index_points(dist_matrix, index_down)
@@ -78,443 +78,336 @@ def generate_distinct_colors(n_colors, saturation=0.7, value=0.9):
         colors.append(rgb)
     return colors
 
-class TokenClusterVisualizer:
-    def __init__(self, 
-                 n_condition_frames=4,
-                 tokens_per_frame=256,
-                 grid_size=16,
-                 original_image_size=(96, 96)):
-        """
-        初始化可视化器
-        """
-        self.n_frames = n_condition_frames      # 4
-        self.tokens_per_frame = tokens_per_frame  # 256
-        self.grid_h = self.grid_w = grid_size   # 16
-        self.total_tokens = n_condition_frames * tokens_per_frame  # 1024
-        
-        self.orig_h, self.orig_w = original_image_size  # 96, 96
-        
-        print(f"=== Token Cluster Visualizer Configuration ===")
-        print(f"Condition frames: {self.n_frames}")
-        print(f"Tokens per frame: {self.tokens_per_frame} ({self.grid_h}x{self.grid_w} grid)")
-        print(f"Total tokens: {self.total_tokens}")
-        print(f"Original image: {self.orig_h}x{self.orig_w}")
+def visualize_single_step_four_subplots(raw_images, cluster_labels, cluster_centers, step_idx, 
+                                       output_dir="four_subplot_visualization",
+                                       target_frame_idx=0,
+                                       grid_size=16,
+                                       n_frames=4,
+                                       tokens_per_frame=256):
+    """
+    为单个步骤生成一张包含四个子图的图片，标出聚类中心
+    1. 原始图像
+    2. 带聚类颜色覆盖的图像
+    3. 聚类大小分布条形图
+    4. 聚类空间分布散点图（标出中心）
+    """
+    os.makedirs(output_dir, exist_ok=True)
     
-    def token_to_frame_and_position(self, token_idx):
-        """将token索引转换为(帧索引, 行, 列)"""
-        frame_idx = token_idx // self.tokens_per_frame
-        spatial_idx = token_idx % self.tokens_per_frame
-        row = spatial_idx // self.grid_w
-        col = spatial_idx % self.grid_w
-        return frame_idx, row, col
+    # 获取图像信息
+    B, T_total, C_img, H, W = raw_images.shape
     
-    def visualize_cluster_on_frames(self, raw_images, cluster_labels, step_idx, 
-                               save_dir="cluster_on_frames"):
-        """
-        将聚类结果可视化到图像上，每个聚类用不同颜色
+    # 分析聚类统计
+    unique_clusters = np.unique(cluster_labels)
+    n_clusters = len(unique_clusters)
+    
+    # 统计每个聚类的token数
+    cluster_sizes = []
+    for cluster_id in unique_clusters:
+        size = np.sum(cluster_labels == cluster_id)
+        cluster_sizes.append(size)
+    
+    # 生成颜色
+    cluster_colors = generate_distinct_colors(n_clusters)
+    
+    # 获取目标帧图像
+    if target_frame_idx >= T_total:
+        target_frame_idx = 0
+    
+    img = raw_images[0, target_frame_idx]  # [C, H, W]
+    
+    # 转换图像格式
+    if img.max() <= 1.0 and img.min() >= 0:
+        img_display = (img.transpose(1, 2, 0) * 255).astype(np.uint8)
+    elif img.min() >= -1 and img.max() <= 1:
+        img_display = ((img + 1) / 2 * 255).transpose(1, 2, 0).astype(np.uint8)
+    else:
+        img_display = img.transpose(1, 2, 0).astype(np.uint8)
+    
+    # ========== 关键改动：提取聚类中心信息 ==========
+    # cluster_centers 是从 cluster_dpc_knn 返回的 index_down
+    center_positions = {}  # 存储聚类中心位置信息
+    for cluster_idx, center_token_idx in enumerate(cluster_centers[0]):  # 取第一个batch
+        # 将token索引转换为(帧索引, 行, 列)
+        frame_idx = center_token_idx // tokens_per_frame
+        spatial_idx = center_token_idx % tokens_per_frame
+        row = spatial_idx // grid_size
+        col = spatial_idx % grid_size
         
-        raw_images: [1, 16, 3, 96, 96] 原始16帧
-        cluster_labels: [N] 每个token的聚类标签
-        step_idx: 步骤索引
-        """
-        os.makedirs(save_dir, exist_ok=True)
+        # 找到该中心对应的聚类ID（cluster_labels中对应的值）
+        center_cluster_id = cluster_labels[center_token_idx]
         
-        B, T_total, C_img, H, W = raw_images.shape
+        center_positions[center_cluster_id] = {
+            'token_idx': int(center_token_idx),
+            'frame_idx': int(frame_idx),
+            'row': int(row),
+            'col': int(col),
+            'is_in_target_frame': (frame_idx == (target_frame_idx % n_frames))
+        }
+    # ========== 改动结束 ==========
+    
+    # 创建包含四个子图的大图
+    fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+    fig.suptitle(f'Step {step_idx}: Token Clustering Analysis\nFrame {target_frame_idx}, {n_clusters} Clusters, {len(cluster_labels)} Tokens', 
+                fontsize=18, fontweight='bold', y=0.98)
+    
+    # ========== 子图1: 原始图像 ==========
+    ax1 = axes[0, 0]
+    ax1.imshow(img_display)
+    ax1.set_title('(a) Original Image', fontsize=14, fontweight='bold', pad=10)
+    ax1.set_xlabel(f'Frame {target_frame_idx}', fontsize=12)
+    ax1.axis('off')
+    
+    # ========== 子图2: 带聚类颜色覆盖的图像 ==========
+    ax2 = axes[0, 1]
+    
+    # 创建带透明度的彩色覆盖层
+    overlay = np.ones((H, W, 4), dtype=np.float32)  # RGBA格式
+    
+    # 计算单元格大小
+    cell_h = H // grid_size
+    cell_w = W // grid_size
+    
+    # 收集属于目标帧的token
+    tokens_in_target_frame = []
+    
+    for token_idx in range(len(cluster_labels)):
+        # 将token索引转换为(帧索引, 行, 列)
+        frame_idx = token_idx // tokens_per_frame
+        spatial_idx = token_idx % tokens_per_frame
+        row = spatial_idx // grid_size
+        col = spatial_idx % grid_size
         
-        print(f"\n=== Visualizing Step {step_idx} ===")
-        print(f"Raw images: {T_total} frames, {H}x{W}")
-        print(f"Cluster labels shape: {cluster_labels.shape}")
+        if frame_idx == (target_frame_idx % n_frames):  # 属于目标条件帧
+            cluster_id = cluster_labels[token_idx]
+            color_idx = np.where(unique_clusters == cluster_id)[0][0]
+            color = cluster_colors[color_idx]
+            
+            x_start = col * cell_w
+            y_start = row * cell_h
+            x_end = min(x_start + cell_w, W)
+            y_end = min(y_start + cell_h, H)
+            
+            # 将颜色添加到覆盖层（带透明度）
+            overlay[y_start:y_end, x_start:x_end, :3] = color  # RGB
+            overlay[y_start:y_end, x_start:x_end, 3] = 0.5     # Alpha (50%透明度)
+            
+            # 检查是否为聚类中心
+            is_center = (token_idx in cluster_centers[0])
+            center_info = None
+            if is_center:
+                center_info = {
+                    'is_center': True,
+                    'cluster_id': cluster_id
+                }
+            
+            tokens_in_target_frame.append({
+                'token_idx': token_idx,
+                'cluster_id': cluster_id,
+                'row': row,
+                'col': col,
+                'color': color,
+                'color_idx': color_idx,
+                'is_center': is_center,
+                'center_info': center_info
+            })
+    
+    # 显示原始图像
+    ax2.imshow(img_display)
+    
+    # 添加彩色覆盖层
+    ax2.imshow(overlay, alpha=0.6)
+    
+    # ========== 关键改动：在覆盖层中标记聚类中心 ==========
+    # 用特殊边框标记聚类中心
+    for token_info in tokens_in_target_frame:
+        x1 = token_info['col'] * cell_w
+        y1 = token_info['row'] * cell_h
         
-        # 分析聚类统计
-        unique_clusters = np.unique(cluster_labels)
-        n_clusters = len(unique_clusters)
-        print(f"Number of clusters: {n_clusters}")
+        # 所有单元格都有细边框
+        rect = patches.Rectangle(
+            (x1, y1), cell_w, cell_h,
+            linewidth=0.8, edgecolor='white', facecolor='none', alpha=0.8
+        )
+        ax2.add_patch(rect)
         
-        # 生成不同颜色
-        cluster_colors = generate_distinct_colors(n_clusters)
+        # 如果是聚类中心，添加特殊标记
+        if token_info['is_center']:
+            # 添加红色星形标记
+            center_x = x1 + cell_w / 2
+            center_y = y1 + cell_h / 2
+            
+            star = patches.RegularPolygon(
+                (center_x, center_y),
+                numVertices=5,  # 五角星
+                radius=cell_w/3,
+                orientation=np.pi/10,
+                facecolor='red',
+                edgecolor='yellow',
+                linewidth=2,
+                alpha=0.9
+            )
+            ax2.add_patch(star)
+            
+            # 添加中心标签
+            ax2.text(center_x, center_y - cell_h/4, 'C', 
+                    fontsize=12, fontweight='bold', ha='center', va='center',
+                    color='yellow', bbox=dict(boxstyle='circle', facecolor='red', alpha=0.8))
+    # ========== 改动结束 ==========
+    
+    ax2.set_title(f'(b) Token Clusters ({len(tokens_in_target_frame)} tokens in frame)', 
+                 fontsize=14, fontweight='bold', pad=10)
+    ax2.set_xlabel('Color indicates cluster membership | Red stars: Cluster Centers', fontsize=12)
+    ax2.axis('off')
+    
+    # ========== 子图3: 聚类大小分布条形图 ==========
+    ax3 = axes[1, 0]
+    
+    # 按大小排序聚类
+    sorted_indices = np.argsort(cluster_sizes)[::-1]
+    sorted_clusters = unique_clusters[sorted_indices]
+    sorted_sizes = np.array(cluster_sizes)[sorted_indices]
+    sorted_colors = np.array(cluster_colors)[sorted_indices]
+    
+    bars = ax3.bar(range(n_clusters), sorted_sizes, 
+                  color=sorted_colors, alpha=0.8, edgecolor='black', linewidth=1.2)
+    ax3.set_xlabel('Cluster ID (sorted by size)', fontsize=13)
+    ax3.set_ylabel('Number of Tokens', fontsize=13)
+    ax3.set_title('(c) Cluster Size Distribution', fontsize=14, fontweight='bold', pad=10)
+    ax3.set_xticks(range(n_clusters))
+    ax3.set_xticklabels([str(int(cid)) for cid in sorted_clusters], fontsize=10, rotation=45)
+    ax3.grid(True, alpha=0.3, axis='y', linestyle='--')
+    ax3.tick_params(axis='both', labelsize=11)
+    
+    # 添加数值标签
+    for i, (bar, size) in enumerate(zip(bars, sorted_sizes)):
+        height = bar.get_height()
+        ax3.text(bar.get_x() + bar.get_width()/2., height,
+                f'{size}', ha='center', va='bottom', 
+                fontsize=10, fontweight='bold', color='black')
+    
+    # 添加统计信息，包含中心信息
+    avg_size = np.mean(cluster_sizes)
+    max_size = np.max(cluster_sizes)
+    min_size = np.min(cluster_sizes)
+    
+    # ========== 关键改动：在统计信息中显示中心数量 ==========
+    centers_in_frame = sum(1 for token in tokens_in_target_frame if token['is_center'])
+    total_centers = len(cluster_centers[0])
+    
+    stats_text = f'Avg: {avg_size:.1f}\nMax: {max_size}\nMin: {min_size}\nCenters: {centers_in_frame}/{total_centers} in frame'
+    ax3.text(0.95, 0.95, stats_text,
+             transform=ax3.transAxes, fontsize=11,
+             verticalalignment='top', horizontalalignment='right',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    # ========== 改动结束 ==========
+    
+    # ========== 子图4: 聚类空间分布散点图（标出中心） ==========
+    ax4 = axes[1, 1]
+    
+    if tokens_in_target_frame:
+        # 收集所有token的位置和颜色
+        rows = [t['row'] for t in tokens_in_target_frame]
+        cols = [t['col'] for t in tokens_in_target_frame]
+        color_indices = [t['color_idx'] for t in tokens_in_target_frame]
+        cluster_ids = [t['cluster_id'] for t in tokens_in_target_frame]
+        is_centers = [t['is_center'] for t in tokens_in_target_frame]
         
-        # 统计每个聚类的token数
-        cluster_sizes = []
-        for cluster_id in unique_clusters:
-            size = np.sum(cluster_labels == cluster_id)
-            cluster_sizes.append(size)
-            print(f"  Cluster {cluster_id}: {size} tokens")
+        # 绘制散点图 - 普通点
+        regular_points = [i for i, is_center in enumerate(is_centers) if not is_center]
+        if regular_points:
+            ax4.scatter(np.array(cols)[regular_points], np.array(rows)[regular_points], 
+                       c=np.array(color_indices)[regular_points], 
+                       cmap='tab20c', s=80, alpha=0.6, 
+                       edgecolors='black', linewidth=0.5, zorder=1)
         
-        # 假设的条件帧映射
-        condition_frame_indices = [0, 5, 10, 15]
+        # ========== 关键改动：用特殊标记绘制聚类中心 ==========
+        center_points = [i for i, is_center in enumerate(is_centers) if is_center]
+        if center_points:
+            # 使用星形标记聚类中心
+            scatter_centers = ax4.scatter(np.array(cols)[center_points], np.array(rows)[center_points], 
+                                         c='red', s=400, marker='*',  # 红色星形
+                                         edgecolors='yellow', linewidth=2.5,
+                                         alpha=1.0, zorder=3,  # 最高zorder确保在最上层
+                                         label='Cluster Centers')
+            
+            # 用三角形标记背景，增强可见性
+            ax4.scatter(np.array(cols)[center_points], np.array(rows)[center_points], 
+                       c='black', s=450, marker='^',  # 黑色三角形背景
+                       alpha=0.3, zorder=2)
         
-        # 为每个条件帧创建可视化
-        for i, orig_frame_idx in enumerate(condition_frame_indices):
-            if orig_frame_idx >= T_total:
-                continue
+        # 添加聚类ID标签（只标注较大的聚类和中心）
+        for token_info in tokens_in_target_frame:
+            # 只标注大小超过平均值的聚类或者是中心
+            cluster_size = cluster_sizes[np.where(unique_clusters == token_info['cluster_id'])[0][0]]
+            if cluster_size > avg_size or token_info['is_center']:
+                label_color = 'white' if token_info['is_center'] else 'black'
+                bbox_color = 'red' if token_info['is_center'] else 'black'
+                bbox_alpha = 0.7 if token_info['is_center'] else 0.5
                 
-            # 获取原始图像
-            img = raw_images[0, orig_frame_idx]  # [C, H, W]
-            
-            # 转换图像格式
-            if img.max() <= 1.0 and img.min() >= 0:
-                img_display = (img.transpose(1, 2, 0) * 255).astype(np.uint8)
-            elif img.min() >= -1 and img.max() <= 1:
-                img_display = ((img + 1) / 2 * 255).transpose(1, 2, 0).astype(np.uint8)
-            else:
-                img_display = img.transpose(1, 2, 0).astype(np.uint8)
-            
-            # 创建可视化
-            fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-            fig.suptitle(f'Step {step_idx}, Frame {orig_frame_idx}: Token Clustering Visualization\n'
-                        f'{n_clusters} clusters, {len(cluster_labels)} total tokens', 
-                        fontsize=14)
-            
-            # 子图1: 原始图像
-            ax1 = axes[0]
-            ax1.imshow(img_display)
-            ax1.set_title('Original Image')
-            ax1.axis('off')
-            
-            # 子图2: 带聚类标注的图像 - 修改为填充颜色
-            ax2 = axes[1]
-            
-            # 创建带透明度的彩色覆盖层
-            overlay = np.ones((H, W, 4), dtype=np.float32)  # RGBA格式
-            
-            # 计算单元格大小
-            cell_h = H // self.grid_h
-            cell_w = W // self.grid_w
-            
-            # 绘制所有属于该帧的token
-            tokens_in_frame = []
-            
-            # 先绘制所有单元格的填充颜色
-            for token_idx in range(len(cluster_labels)):
-                frame_idx, row, col = self.token_to_frame_and_position(token_idx)
-                if frame_idx == i:  # 属于当前条件帧
-                    cluster_id = cluster_labels[token_idx]
-                    color = cluster_colors[cluster_id]
-                    
-                    x_start = col * cell_w
-                    y_start = row * cell_h
-                    x_end = min(x_start + cell_w, W)
-                    y_end = min(y_start + cell_h, H)
-                    
-                    # 将颜色添加到覆盖层（带透明度）
-                    overlay[y_start:y_end, x_start:x_end, :3] = color  # RGB
-                    overlay[y_start:y_end, x_start:x_end, 3] = 0.4     # Alpha (40%透明度)
-                    
-                    tokens_in_frame.append({
-                        'token_idx': token_idx,
-                        'cluster_id': cluster_id,
-                        'row': row,
-                        'col': col,
-                        'color': color
-                    })
-            
-            # 显示原始图像
-            ax2.imshow(img_display)
-            
-            # 添加彩色覆盖层
-            ax2.imshow(overlay, alpha=0.5)
-            
-            # 可选：添加细边框来区分单元格
-            for token_info in tokens_in_frame:
-                x1 = token_info['col'] * cell_w
-                y1 = token_info['row'] * cell_h
-                
-                # 添加细边框
-                rect = patches.Rectangle(
-                    (x1, y1), cell_w, cell_h,
-                    linewidth=0.5, edgecolor='black', facecolor='none', alpha=0.3
-                )
-                ax2.add_patch(rect)
-            
-            ax2.set_title(f'Token Clusters ({len(tokens_in_frame)} tokens in this frame)')
-            ax2.axis('off')
-            
-            # 子图3: 聚类中心分布 - 保持原样
-            ax3 = axes[2]
-            
-            # 收集token位置和聚类信息
-            rows = [t['row'] for t in tokens_in_frame]
-            cols = [t['col'] for t in tokens_in_frame]
-            cluster_ids = [t['cluster_id'] for t in tokens_in_frame]
-            colors = [t['color'] for t in tokens_in_frame]
-            
-            if rows and cols:
-                # 绘制散点图
-                scatter = ax3.scatter(cols, rows, c=colors, s=100, alpha=0.7, 
-                                    edgecolors='black', linewidth=1)
-                
-                # 添加聚类标签
-                for idx, token_info in enumerate(tokens_in_frame):
-                    ax3.text(token_info['col'], token_info['row'], 
-                            str(token_info['cluster_id']),
-                            fontsize=8, ha='center', va='center',
-                            color='white', fontweight='bold')
-                
-                ax3.set_xlabel('Column')
-                ax3.set_ylabel('Row')
-                ax3.set_title('Cluster Distribution (Numbers = Cluster ID)')
-                ax3.set_xlim(-0.5, self.grid_w - 0.5)
-                ax3.set_ylim(self.grid_h - 0.5, -0.5)  # 反转y轴
-                ax3.grid(True, alpha=0.3)
-            
-            plt.tight_layout()
-            frame_save_path = os.path.join(save_dir, f'step_{step_idx:03d}_frame_{orig_frame_idx:02d}_clusters.png')
-            plt.savefig(frame_save_path, dpi=120, bbox_inches='tight')
-            plt.close()
-            
-            print(f"  Saved frame {orig_frame_idx}: {frame_save_path}")
+                ax4.text(token_info['col'], token_info['row'], 
+                        str(token_info['cluster_id']),
+                        fontsize=10, ha='center', va='center',
+                        fontweight='bold', color=label_color,
+                        bbox=dict(boxstyle='round,pad=0.3', 
+                                 facecolor=bbox_color, alpha=bbox_alpha))
         
-        # 创建聚类统计图
-        self.create_cluster_statistics(cluster_labels, step_idx, save_dir)
+        # 添加图例
+        if center_points:
+            ax4.legend(handles=[scatter_centers], loc='upper right', fontsize=11)
         
-        return n_clusters, cluster_sizes
+        ax4.set_xlabel('Column (Grid Position)', fontsize=13)
+        ax4.set_ylabel('Row (Grid Position)', fontsize=13)
+        ax4.set_title('(d) Spatial Distribution (Stars: Cluster Centers)', 
+                     fontsize=14, fontweight='bold', pad=10)
+        ax4.set_xlim(-0.5, grid_size - 0.5)
+        ax4.set_ylim(grid_size - 0.5, -0.5)  # 反转y轴
+        ax4.grid(True, alpha=0.3, linestyle='--')
+        ax4.tick_params(axis='both', labelsize=11)
         
-    def create_cluster_statistics(self, cluster_labels, step_idx, save_dir):
-        """创建聚类统计信息"""
-        unique_clusters = np.unique(cluster_labels)
-        n_clusters = len(unique_clusters)
-        
-        # 统计每个聚类的token数
-        cluster_sizes = []
-        for cluster_id in unique_clusters:
-            size = np.sum(cluster_labels == cluster_id)
-            cluster_sizes.append(size)
-        
-        # 分析空间分布
-        spatial_distributions = []
-        for cluster_id in unique_clusters:
-            # 获取该聚类的所有token索引
-            token_indices = np.where(cluster_labels == cluster_id)[0]
-            
-            # 转换为空间位置
-            positions = []
-            for token_idx in token_indices:
-                frame_idx, row, col = self.token_to_frame_and_position(token_idx)
-                positions.append([frame_idx, row, col])
-            
-            positions = np.array(positions)
-            
-            # 计算空间统计
-            if len(positions) > 0:
-                frame_std = positions[:, 0].std() if len(positions) > 1 else 0
-                row_std = positions[:, 1].std() if len(positions) > 1 else 0
-                col_std = positions[:, 2].std() if len(positions) > 1 else 0
-                
-                spatial_distributions.append({
-                    'cluster_id': cluster_id,
-                    'size': len(positions),
-                    'frame_std': frame_std,
-                    'row_std': row_std,
-                    'col_std': col_std,
-                    'positions': positions
-                })
-        
-        # 创建统计图
-        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-        fig.suptitle(f'Step {step_idx}: Cluster Statistics', fontsize=16)
-        
-        # 1. 聚类大小分布
-        ax1 = axes[0, 0]
-        bars = ax1.bar(range(n_clusters), cluster_sizes, 
-                      color=generate_distinct_colors(n_clusters), alpha=0.7)
-        ax1.set_xlabel('Cluster ID')
-        ax1.set_ylabel('Number of Tokens')
-        ax1.set_title('Cluster Sizes')
-        ax1.set_xticks(range(n_clusters))
-        ax1.set_xticklabels([str(i) for i in unique_clusters])
-        ax1.grid(True, alpha=0.3, axis='y')
-        
-        # 添加数值标签
-        for bar, size in zip(bars, cluster_sizes):
-            height = bar.get_height()
-            ax1.text(bar.get_x() + bar.get_width()/2., height,
-                    f'{size}', ha='center', va='bottom')
-        
-        # 2. 聚类大小的累积分布
-        ax2 = axes[0, 1]
-        sorted_sizes = np.sort(cluster_sizes)[::-1]
-        cumulative = np.cumsum(sorted_sizes)
-        ax2.plot(range(n_clusters), cumulative, 'b-o', linewidth=2)
-        ax2.fill_between(range(n_clusters), 0, cumulative, alpha=0.3)
-        ax2.set_xlabel('Cluster Rank (sorted by size)')
-        ax2.set_ylabel('Cumulative Tokens')
-        ax2.set_title('Cumulative Distribution')
-        ax2.grid(True, alpha=0.3)
-        
-        # 3. 帧分布
-        ax3 = axes[0, 2]
-        frame_counts = np.zeros(self.n_frames)
-        for dist in spatial_distributions:
-            if len(dist['positions']) > 0:
-                frame_indices = dist['positions'][:, 0].astype(int)
-                for frame_idx in frame_indices:
-                    if frame_idx < self.n_frames:
-                        frame_counts[frame_idx] += 1
-        
-        ax3.bar(range(self.n_frames), frame_counts, alpha=0.7, color='green')
-        ax3.set_xlabel('Frame Index')
-        ax3.set_ylabel('Total Tokens')
-        ax3.set_title('Token Distribution Across Frames')
-        ax3.set_xticks(range(self.n_frames))
-        ax3.grid(True, alpha=0.3, axis='y')
-        
-        # 4. 空间分布散点图（所有聚类）
-        ax4 = axes[1, 0]
-        all_rows, all_cols, all_colors = [], [], []
-        
-        for dist in spatial_distributions:
-            if len(dist['positions']) > 0:
-                rows = dist['positions'][:, 1]
-                cols = dist['positions'][:, 2]
-                color = generate_distinct_colors(1)[0]  # 每个聚类一个颜色
-                
-                all_rows.extend(rows)
-                all_cols.extend(cols)
-                all_colors.extend([color] * len(rows))
-        
-        if all_rows:
-            scatter = ax4.scatter(all_cols, all_rows, c=all_colors, s=50, alpha=0.6)
-            ax4.set_xlabel('Column')
-            ax4.set_ylabel('Row')
-            ax4.set_title('All Clusters Spatial Distribution')
-            ax4.set_xlim(-0.5, self.grid_w - 0.5)
-            ax4.set_ylim(self.grid_h - 0.5, -0.5)
-            ax4.grid(True, alpha=0.3)
-        
-        # 5. 空间离散度统计
-        ax5 = axes[1, 1]
-        if spatial_distributions:
-            cluster_ids = [d['cluster_id'] for d in spatial_distributions]
-            spatial_spreads = []
-            
-            for dist in spatial_distributions:
-                if len(dist['positions']) > 1:
-                    # 计算平均最近邻距离作为空间离散度
-                    positions_2d = dist['positions'][:, 1:]  # 只取row和col
-                    if len(positions_2d) > 1:
-                        distances = cdist(positions_2d, positions_2d)
-                        np.fill_diagonal(distances, np.inf)
-                        min_distances = distances.min(axis=1)
-                        spread = min_distances.mean()
-                        spatial_spreads.append(spread)
-                    else:
-                        spatial_spreads.append(0)
-                else:
-                    spatial_spreads.append(0)
-            
-            bars5 = ax5.bar(range(len(cluster_ids)), spatial_spreads, 
-                           color=generate_distinct_colors(len(cluster_ids)), alpha=0.7)
-            ax5.set_xlabel('Cluster ID')
-            ax5.set_ylabel('Avg Nearest Neighbor Distance')
-            ax5.set_title('Spatial Spread of Clusters')
-            ax5.set_xticks(range(len(cluster_ids)))
-            ax5.set_xticklabels([str(cid) for cid in cluster_ids])
-            ax5.grid(True, alpha=0.3, axis='y')
-        
-        # 6. 聚类大小与空间离散度的关系
-        ax6 = axes[1, 2]
-        if spatial_distributions:
-            sizes = [d['size'] for d in spatial_distributions]
-            spreads = []
-            for dist in spatial_distributions:
-                if len(dist['positions']) > 1:
-                    positions_2d = dist['positions'][:, 1:]
-                    if len(positions_2d) > 1:
-                        distances = cdist(positions_2d, positions_2d)
-                        np.fill_diagonal(distances, np.inf)
-                        min_distances = distances.min(axis=1)
-                        spread = min_distances.mean()
-                        spreads.append(spread)
-                    else:
-                        spreads.append(0)
-                else:
-                    spreads.append(0)
-            
-            scatter6 = ax6.scatter(sizes, spreads, s=100, alpha=0.7, 
-                                  c=generate_distinct_colors(len(sizes)))
-            ax6.set_xlabel('Cluster Size')
-            ax6.set_ylabel('Spatial Spread')
-            ax6.set_title('Size vs Spread')
-            ax6.grid(True, alpha=0.3)
-            
-            # 添加趋势线
-            if len(sizes) > 1:
-                z = np.polyfit(sizes, spreads, 1)
-                p = np.poly1d(z)
-                x_range = np.linspace(min(sizes), max(sizes), 100)
-                ax6.plot(x_range, p(x_range), "r--", alpha=0.5, label='Trend')
-                ax6.legend()
-        
-        plt.tight_layout()
-        stats_save_path = os.path.join(save_dir, f'step_{step_idx:03d}_cluster_statistics.png')
-        plt.savefig(stats_save_path, dpi=120, bbox_inches='tight')
-        plt.close()
-        
-        # 保存详细统计信息
-        stats_text_path = os.path.join(save_dir, f'step_{step_idx:03d}_cluster_details.txt')
-        with open(stats_text_path, 'w') as f:
-            f.write(f"=== Step {step_idx} Cluster Analysis ===\n")
-            f.write(f"Total tokens: {len(cluster_labels)}\n")
-            f.write(f"Number of clusters: {n_clusters}\n")
-            f.write(f"\nCluster Details:\n")
-            
-            for i, cluster_id in enumerate(unique_clusters):
-                size = cluster_sizes[i]
-                percentage = size / len(cluster_labels) * 100
-                
-                f.write(f"\nCluster {cluster_id}:\n")
-                f.write(f"  Size: {size} tokens ({percentage:.1f}%)\n")
-                
-                # 找出该聚类的token
-                token_indices = np.where(cluster_labels == cluster_id)[0]
-                
-                # 分析帧分布
-                frame_dist = {}
-                for token_idx in token_indices:
-                    frame_idx, _, _ = self.token_to_frame_and_position(token_idx)
-                    frame_dist[frame_idx] = frame_dist.get(frame_idx, 0) + 1
-                
-                f.write(f"  Frame distribution:\n")
-                for frame_idx in sorted(frame_dist.keys()):
-                    f.write(f"    Frame {frame_idx}: {frame_dist[frame_idx]} tokens\n")
-                
-                # 分析空间位置
-                if token_indices.size > 0:
-                    rows, cols = [], []
-                    for token_idx in token_indices:
-                        _, row, col = self.token_to_frame_and_position(token_idx)
-                        rows.append(row)
-                        cols.append(col)
-                    
-                    f.write(f"  Spatial statistics:\n")
-                    f.write(f"    Row range: {min(rows)}-{max(rows)}\n")
-                    f.write(f"    Col range: {min(cols)}-{max(cols)}\n")
-                    
-                    if len(rows) > 1:
-                        row_mean = np.mean(rows)
-                        col_mean = np.mean(cols)
-                        row_std = np.std(rows)
-                        col_std = np.std(cols)
-                        
-                        f.write(f"    Row mean±std: {row_mean:.1f}±{row_std:.1f}\n")
-                        f.write(f"    Col mean±std: {col_mean:.1f}±{col_std:.1f}\n")
-        
-        print(f"Cluster statistics saved: {stats_save_path}")
-        print(f"Cluster details saved: {stats_text_path}")
+        # 添加统计信息
+        stats_text = f'Tokens shown: {len(tokens_in_target_frame)}\nCenters: {len(center_points)} in frame'
+        ax4.text(0.02, 0.98, stats_text,
+                transform=ax4.transAxes, fontsize=11,
+                verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    else:
+        ax4.text(0.5, 0.5, 'No tokens in this frame',
+                transform=ax4.transAxes, fontsize=14,
+                ha='center', va='center')
+        ax4.set_title('(d) Spatial Distribution', fontsize=14, fontweight='bold', pad=10)
+        ax4.axis('off')
+    
+    # 调整布局并保存
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    save_path = os.path.join(output_dir, f'step_{step_idx:03d}.png')
+    plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
+    
+    print(f"Saved visualization with cluster centers: {save_path}")
+    
+    # 返回统计信息，包含中心信息
+    centers_in_target_frame = sum(1 for token in tokens_in_target_frame if token['is_center'])
+    
+    return {
+        'step': step_idx,
+        'n_clusters': n_clusters,
+        'total_tokens': len(cluster_labels),
+        'total_centers': len(cluster_centers[0]),
+        'tokens_in_frame': len(tokens_in_target_frame),
+        'centers_in_frame': centers_in_target_frame,
+        'avg_cluster_size': np.mean(cluster_sizes),
+        'max_cluster_size': np.max(cluster_sizes),
+        'min_cluster_size': np.min(cluster_sizes),
+        'save_path': save_path,
+        'center_positions': center_positions
+    }
 
-def process_pkl_with_cluster_visualization(pkl_path, output_dir="cluster_visualization", 
-                                         max_steps=10, cluster_num=100, k=5):
+def process_pkl_four_subplot_visualization(pkl_path, output_dir="four_subplot_results", 
+                                         max_steps=5, cluster_num=100, k=5,
+                                         target_frame_idx=0):
     """
-    处理pkl文件，执行聚类并将结果可视化到图像上
-    
-    pkl_path: pkl文件路径
-    output_dir: 输出目录
-    max_steps: 最大处理步数
-    cluster_num: 聚类数量
-    k: KNN参数
+    处理pkl文件，为每个步骤生成一张四子图可视化
     """
-    import pickle
-    
     print(f"Loading data from: {pkl_path}")
     with open(pkl_path, "rb") as f:
         data = pickle.load(f)
@@ -527,27 +420,27 @@ def process_pkl_with_cluster_visualization(pkl_path, output_dir="cluster_visuali
         print("Error: 'raw_hot_input_token' not found in data!")
         return
     
-    # 初始化可视化器
-    visualizer = TokenClusterVisualizer(
-        n_condition_frames=4,
-        tokens_per_frame=256,
-        grid_size=16,
-        original_image_size=(96, 96)
-    )
+    # 参数配置
+    n_frames = 4
+    tokens_per_frame = 256
+    grid_size = 16
     
     # 确定处理步数
     n_steps = min(len(data["raw_images"]), 
                   len(data["raw_hot_input_token"]),
                   max_steps)
     
-    print(f"\nProcessing {n_steps} steps...")
+    print(f"\nProcessing {n_steps} steps for four-subplot visualization...")
+    print(f"Target frame index: {target_frame_idx}")
+    print(f"Cluster number: {cluster_num}")
+    print(f"Output directory: {output_dir}")
     
-    all_cluster_stats = []
+    all_stats = []
     
     for step_idx in range(n_steps):
-        print(f"\n{'='*50}")
+        print(f"\n{'='*60}")
         print(f"Processing Step {step_idx}")
-        print(f"{'='*50}")
+        print(f"{'='*60}")
         
         # 获取数据
         raw_images = data["raw_images"][step_idx]  # [1, 16, 3, 96, 96]
@@ -575,157 +468,182 @@ def process_pkl_with_cluster_visualization(pkl_path, output_dir="cluster_visuali
             cluster_labels = cluster_labels[0]  # [N]
         
         print(f"Cluster labels shape: {cluster_labels.shape}")
-        print(f"Unique clusters: {np.unique(cluster_labels)}")
+        print(f"Number of unique clusters: {len(np.unique(cluster_labels))}")
         
-        # 可视化聚类结果
-        n_clusters, cluster_sizes = visualizer.visualize_cluster_on_frames(
-            raw_images, 
-            cluster_labels, 
-            step_idx,
-            save_dir=output_dir
+        # 生成四子图可视化
+        stats = visualize_single_step_four_subplots(
+            raw_images=raw_images,
+            cluster_labels=cluster_labels,
+            step_idx=step_idx,
+            cluster_centers=cluster_indices,
+            output_dir=output_dir,
+            target_frame_idx=target_frame_idx,
+            grid_size=grid_size,
+            n_frames=n_frames,
+            tokens_per_frame=tokens_per_frame
         )
         
-        all_cluster_stats.append({
-            'step': step_idx,
-            'n_clusters': n_clusters,
-            'cluster_sizes': cluster_sizes,
-            'total_tokens': len(cluster_labels)
-        })
+        all_stats.append(stats)
         
-        print(f"Step {step_idx} completed: {n_clusters} clusters")
+        print(f"Step {step_idx} completed:")
+        print(f"  Clusters: {stats['n_clusters']}")
+        print(f"  Total tokens: {stats['total_tokens']}")
+        print(f"  Tokens in frame {target_frame_idx}: {stats['tokens_in_frame']}")
+        print(f"  Avg cluster size: {stats['avg_cluster_size']:.1f}")
     
-    # 创建总体统计
-    if all_cluster_stats:
-        print(f"\n{'='*50}")
-        print(f"Overall Statistics")
-        print(f"{'='*50}")
+    # 生成总体统计报告
+    if all_stats:
+        print(f"\n{'='*60}")
+        print(f"OVERALL STATISTICS")
+        print(f"{'='*60}")
         
         # 计算总体统计
-        avg_clusters = np.mean([s['n_clusters'] for s in all_cluster_stats])
-        avg_tokens = np.mean([s['total_tokens'] for s in all_cluster_stats])
+        avg_clusters = np.mean([s['n_clusters'] for s in all_stats])
+        avg_tokens = np.mean([s['total_tokens'] for s in all_stats])
+        avg_frame_tokens = np.mean([s['tokens_in_frame'] for s in all_stats])
+        avg_cluster_size = np.mean([s['avg_cluster_size'] for s in all_stats])
         
+        print(f"Steps analyzed: {n_steps}")
         print(f"Average clusters per step: {avg_clusters:.1f}")
-        print(f"Average tokens per step: {avg_tokens:.1f}")
-        
-        # 分析聚类大小分布
-        all_cluster_sizes = []
-        for stats in all_cluster_stats:
-            all_cluster_sizes.extend(stats['cluster_sizes'])
-        
-        if all_cluster_sizes:
-            print(f"\nCluster Size Statistics:")
-            print(f"  Min cluster size: {np.min(all_cluster_sizes)}")
-            print(f"  Max cluster size: {np.max(all_cluster_sizes)}")
-            print(f"  Mean cluster size: {np.mean(all_cluster_sizes):.1f}")
-            print(f"  Median cluster size: {np.median(all_cluster_sizes):.1f}")
-            print(f"  Std cluster size: {np.std(all_cluster_sizes):.1f}")
+        print(f"Average total tokens per step: {avg_tokens:.1f}")
+        print(f"Average tokens in frame {target_frame_idx}: {avg_frame_tokens:.1f}")
+        print(f"Average cluster size: {avg_cluster_size:.1f}")
         
         # 保存总体统计
-        overall_stats_path = os.path.join(output_dir, "overall_cluster_analysis.txt")
+        overall_stats_path = os.path.join(output_dir, "overall_statistics.txt")
         with open(overall_stats_path, 'w') as f:
-            f.write("=== Overall Cluster Analysis ===\n")
-            f.write(f"Total steps analyzed: {n_steps}\n")
+            f.write("=== FOUR-SUBPLOT VISUALIZATION OVERALL STATISTICS ===\n\n")
+            f.write(f"Input file: {pkl_path}\n")
+            f.write(f"Steps analyzed: {n_steps}\n")
+            f.write(f"Target frame index: {target_frame_idx}\n")
             f.write(f"Cluster number per step: {cluster_num}\n")
-            f.write(f"KNN parameter k: {k}\n")
-            f.write(f"Average clusters per step: {avg_clusters:.1f}\n")
-            f.write(f"Average tokens per step: {avg_tokens:.1f}\n")
+            f.write(f"KNN parameter k: {k}\n\n")
             
-            if all_cluster_sizes:
-                f.write(f"\nCluster Size Statistics:\n")
-                f.write(f"  Min: {np.min(all_cluster_sizes)}\n")
-                f.write(f"  Max: {np.max(all_cluster_sizes)}\n")
-                f.write(f"  Mean: {np.mean(all_cluster_sizes):.1f}\n")
-                f.write(f"  Median: {np.median(all_cluster_sizes):.1f}\n")
-                f.write(f"  Std: {np.std(all_cluster_sizes):.1f}\n")
+            f.write("SUMMARY STATISTICS:\n")
+            f.write(f"  Average clusters per step: {avg_clusters:.1f}\n")
+            f.write(f"  Average total tokens per step: {avg_tokens:.1f}\n")
+            f.write(f"  Average tokens in target frame: {avg_frame_tokens:.1f}\n")
+            f.write(f"  Average cluster size: {avg_cluster_size:.1f}\n\n")
             
-            f.write(f"\nStep-by-step Statistics:\n")
-            for stats in all_cluster_stats:
+            f.write("STEP-BY-STEP DETAILS:\n")
+            for stats in all_stats:
                 f.write(f"\nStep {stats['step']}:\n")
                 f.write(f"  Clusters: {stats['n_clusters']}\n")
-                f.write(f"  Tokens: {stats['total_tokens']}\n")
-                f.write(f"  Average cluster size: {np.mean(stats['cluster_sizes']):.1f}\n")
+                f.write(f"  Total tokens: {stats['total_tokens']}\n")
+                f.write(f"  Tokens in frame {target_frame_idx}: {stats['tokens_in_frame']}\n")
+                f.write(f"  Avg/Max/Min cluster size: {stats['avg_cluster_size']:.1f}/{stats['max_cluster_size']}/{stats['min_cluster_size']}\n")
+                f.write(f"  Output file: {stats['save_path']}\n")
         
         print(f"\nAll visualizations saved to: {output_dir}")
         print(f"Overall statistics saved: {overall_stats_path}")
         
-        # 创建总体趋势图
-        create_overall_trend_plot(all_cluster_stats, output_dir)
-
-def create_overall_trend_plot(all_cluster_stats, output_dir):
-    """创建总体趋势图"""
-    steps = [s['step'] for s in all_cluster_stats]
-    n_clusters = [s['n_clusters'] for s in all_cluster_stats]
-    avg_cluster_sizes = [np.mean(s['cluster_sizes']) for s in all_cluster_stats]
+        # 创建汇总图表
+        create_summary_chart(all_stats, output_dir)
     
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    fig.suptitle('Cluster Analysis Trends Across Steps', fontsize=16)
+    return all_stats
+
+def create_summary_chart(all_stats, output_dir):
+    """创建步骤间统计汇总图表"""
+    steps = [s['step'] for s in all_stats]
+    n_clusters = [s['n_clusters'] for s in all_stats]
+    total_tokens = [s['total_tokens'] for s in all_stats]
+    frame_tokens = [s['tokens_in_frame'] for s in all_stats]
+    avg_sizes = [s['avg_cluster_size'] for s in all_stats]
+    
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+    fig.suptitle('Summary of Cluster Statistics Across Steps', fontsize=16, fontweight='bold')
     
     # 1. 聚类数量趋势
     ax1 = axes[0, 0]
-    ax1.plot(steps, n_clusters, 'b-o', linewidth=2, markersize=6)
-    ax1.set_xlabel('Step Index')
-    ax1.set_ylabel('Number of Clusters')
-    ax1.set_title('Number of Clusters per Step')
-    ax1.grid(True, alpha=0.3)
+    ax1.plot(steps, n_clusters, 'b-o', linewidth=2.5, markersize=8, markerfacecolor='white')
+    ax1.fill_between(steps, 0, n_clusters, alpha=0.2, color='blue')
+    ax1.set_xlabel('Step Index', fontsize=12)
+    ax1.set_ylabel('Number of Clusters', fontsize=12)
+    ax1.set_title('Clusters per Step', fontsize=13, fontweight='bold')
+    ax1.grid(True, alpha=0.3, linestyle='--')
+    ax1.tick_params(axis='both', labelsize=11)
     
-    # 2. 平均聚类大小趋势
+    # 2. Token数量趋势
     ax2 = axes[0, 1]
-    ax2.plot(steps, avg_cluster_sizes, 'r-o', linewidth=2, markersize=6)
-    ax2.set_xlabel('Step Index')
-    ax2.set_ylabel('Average Cluster Size')
-    ax2.set_title('Average Cluster Size per Step')
-    ax2.grid(True, alpha=0.3)
+    width = 0.35
+    x = np.arange(len(steps))
+    ax2.bar(x - width/2, total_tokens, width, label='Total Tokens', alpha=0.7, color='green')
+    ax2.bar(x + width/2, frame_tokens, width, label='Tokens in Target Frame', alpha=0.7, color='orange')
+    ax2.set_xlabel('Step Index', fontsize=12)
+    ax2.set_ylabel('Number of Tokens', fontsize=12)
+    ax2.set_title('Token Distribution', fontsize=13, fontweight='bold')
+    ax2.set_xticks(x)
+    ax2.set_xticklabels([str(s) for s in steps])
+    ax2.grid(True, alpha=0.3, axis='y', linestyle='--')
+    ax2.legend(fontsize=11)
+    ax2.tick_params(axis='both', labelsize=11)
     
-    # 3. 聚类大小分布箱线图
+    # 3. 平均聚类大小
     ax3 = axes[1, 0]
-    cluster_sizes_data = [s['cluster_sizes'] for s in all_cluster_stats]
-    box = ax3.boxplot(cluster_sizes_data, patch_artist=True)
+    bars = ax3.bar(steps, avg_sizes, alpha=0.7, color='purple', edgecolor='black')
+    ax3.set_xlabel('Step Index', fontsize=12)
+    ax3.set_ylabel('Average Cluster Size', fontsize=12)
+    ax3.set_title('Average Cluster Size per Step', fontsize=13, fontweight='bold')
+    ax3.set_xticks(steps)
+    ax3.grid(True, alpha=0.3, axis='y', linestyle='--')
+    ax3.tick_params(axis='both', labelsize=11)
     
-    # 设置箱线图颜色
-    colors = ['lightblue', 'lightgreen', 'lightcoral', 'lightyellow', 'lightpink']
-    for patch, color in zip(box['boxes'], colors * (len(cluster_sizes_data) // len(colors) + 1)):
-        patch.set_facecolor(color)
+    # 添加数值标签
+    for bar, size in zip(bars, avg_sizes):
+        height = bar.get_height()
+        ax3.text(bar.get_x() + bar.get_width()/2., height,
+                f'{size:.1f}', ha='center', va='bottom', 
+                fontsize=10, fontweight='bold')
     
-    ax3.set_xlabel('Step Index')
-    ax3.set_ylabel('Cluster Size')
-    ax3.set_title('Cluster Size Distribution per Step')
-    ax3.set_xticklabels([str(s) for s in steps])
-    ax3.grid(True, alpha=0.3, axis='y')
-    
-    # 4. 散点图：聚类数量 vs 平均聚类大小
+    # 4. 聚类数量 vs 平均聚类大小散点图
     ax4 = axes[1, 1]
-    scatter = ax4.scatter(n_clusters, avg_cluster_sizes, c=steps, cmap='viridis', s=100, alpha=0.7)
-    ax4.set_xlabel('Number of Clusters')
-    ax4.set_ylabel('Average Cluster Size')
-    ax4.set_title('Clusters vs Average Size')
-    ax4.grid(True, alpha=0.3)
+    scatter = ax4.scatter(n_clusters, avg_sizes, c=steps, 
+                         cmap='viridis', s=150, alpha=0.8, 
+                         edgecolors='black', linewidth=1.5)
+    ax4.set_xlabel('Number of Clusters', fontsize=12)
+    ax4.set_ylabel('Average Cluster Size', fontsize=12)
+    ax4.set_title('Clusters vs Average Size', fontsize=13, fontweight='bold')
+    ax4.grid(True, alpha=0.3, linestyle='--')
+    ax4.tick_params(axis='both', labelsize=11)
+    
+    # 添加趋势线
+    if len(n_clusters) > 1:
+        z = np.polyfit(n_clusters, avg_sizes, 1)
+        p = np.poly1d(z)
+        x_range = np.linspace(min(n_clusters), max(n_clusters), 100)
+        ax4.plot(x_range, p(x_range), "r--", alpha=0.7, linewidth=2, 
+                label=f'Trend: y={z[0]:.3f}x+{z[1]:.3f}')
+        ax4.legend(fontsize=11)
     
     # 添加颜色条
-    plt.colorbar(scatter, ax=ax4, label='Step Index')
+    cbar = plt.colorbar(scatter, ax=ax4)
+    cbar.set_label('Step Index', fontsize=11)
     
     plt.tight_layout()
-    trend_path = os.path.join(output_dir, "overall_cluster_trends.png")
-    plt.savefig(trend_path, dpi=120, bbox_inches='tight')
+    summary_path = os.path.join(output_dir, "summary_across_steps.png")
+    plt.savefig(summary_path, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()
     
-    print(f"Overall trend plot saved: {trend_path}")
+    print(f"Summary chart saved: {summary_path}")
 
 if __name__ == "__main__":
     # 使用示例
     pkl_path = "3.pkl"  # 修改为您的pkl文件路径
-    output_dir = "token_cluster_visualization"
+    output_dir = "cluster_visualization"
     
     # 参数说明：
     # pkl_path: 输入pkl文件路径
     # output_dir: 输出目录
-    # max_steps: 最大处理步数
+    # max_steps: 最大处理步数（建议5-10步，每步生成一张图）
     # cluster_num: 聚类数量
-    # k: KNN参数（通常5-10）
+    # k: KNN参数（通常5）
+    # target_frame_idx: 要可视化的目标帧索引（0, 5, 10, 15对应4个条件帧）
     
-    process_pkl_with_cluster_visualization(
+    process_pkl_four_subplot_visualization(
         pkl_path=pkl_path,
         output_dir=output_dir,
-        max_steps=5,       # 只处理前5个步骤（每个步骤会生成多个图像）
-        cluster_num=100,   # 聚类100个中心
-        k=5               # KNN使用5个最近邻
+        max_steps=10,             # 处理前5个步骤
+        cluster_num=300,         # 聚类100个中心
+        k=2,                    # KNN使用5个最近邻
+        target_frame_idx=0       # 可视化第0帧（可改为5, 10, 15查看不同帧）
     )
