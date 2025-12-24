@@ -68,6 +68,63 @@ def cluster_dpc_knn(x, cluster_num, k=5, token_mask=None):
 
     return index_down.cpu().numpy(), idx_cluster.cpu().numpy()
 
+
+def select_channel(x, select_ratio=0.3, token_mask=None, num_frames=4):
+    with torch.no_grad():
+        B, N, C = x.shape
+        num_channels = N // num_frames
+        
+        # 计算每对帧之间的欧氏距离
+        max_distance_per_channel = torch.zeros(B, num_channels, device=x.device)
+        
+        # 遍历所有帧对
+        for i in range(num_frames-1):
+            # 计算帧i和帧j所有通道的欧氏距离 [B, 256]
+            frame_i = x[:, i*num_channels:(i+1)*num_channels]  # [B, 256, C]
+            frame_j = x[:, (i+1)*num_channels:(i+2)*num_channels]  # [B, 256, C]
+            
+            # 计算每个通道的768维距离
+            distance = torch.norm(frame_i - frame_j, dim=-1)  # [B, 256]
+            
+            # 更新最大距离
+            max_distance_per_channel = torch.maximum(max_distance_per_channel, distance)
+        
+        # 处理掩码
+        if token_mask is not None:
+            if token_mask.dim() == 2:  # [B, 1024]
+                mask_reshaped = token_mask.view(B, num_frames, num_channels)
+            else:  # [B, 4, 256]
+                mask_reshaped = token_mask
+            
+            # 通道在所有帧中至少一帧有效
+            valid_channels = mask_reshaped.any(dim=1)  # [B, 256]
+            max_distance_per_channel = max_distance_per_channel.masked_fill(~valid_channels, -float('inf'))
+        
+        # 选择距离最大的通道
+        select_num = max(1, int(num_channels * select_ratio))
+        _, selected_channels = torch.topk(max_distance_per_channel, k=select_num, dim=-1)  # [B, select_num]
+        
+        # 还原到1024token的索引
+        batch_indices = []
+        for b in range(B):
+            indices = []
+            for ch_idx in selected_channels[b]:
+                # 这个通道在4帧中的位置
+                for frame in range(num_frames):
+                    indices.append(frame * num_channels + ch_idx.item())
+            batch_indices.append(indices)
+        
+        # 转换为numpy数组
+        if B == 1:
+            # 单batch，直接返回1D数组
+            index_down = np.array(batch_indices[0], dtype=np.int64)
+        else:
+            # 多batch，返回2D数组
+            index_down = np.array(batch_indices, dtype=np.int64)
+        
+        return index_down
+
+
 class ClusterVisualizer:
     def __init__(self, 
                  n_condition_frames=4,
@@ -484,14 +541,19 @@ def process_pkl_file(pkl_path, output_dir="cluster_results", max_steps=10, clust
         
         # 执行聚类
         print(f"Running DPC-KNN clustering (k={k}, clusters={cluster_num})...")
-        cluster_indices, cluster_labels = cluster_dpc_knn(
+
+        cluster_indices = select_channel(hot_input_tensor, select_ratio=0.1)
+        cluster_indices2, cluster_labels = cluster_dpc_knn(
             hot_input_tensor, 
-            cluster_num=cluster_num, 
+            cluster_num=100, 
             k=k
         )
         
+        combined_indices = np.concatenate([cluster_indices.flatten(), cluster_indices2.flatten()])
+        unique_sorted_indices = np.unique(combined_indices)
+        
         # cluster_indices是聚类中心的索引
-        cluster_indices = cluster_indices.flatten()  # [cluster_num]
+        cluster_indices = unique_sorted_indices.flatten()  # [cluster_num]
         
         print(f"Cluster selected {len(cluster_indices)} tokens")
         print(f"Cluster indices range: {cluster_indices.min()} to {cluster_indices.max()}")
@@ -535,7 +597,7 @@ def process_pkl_file(pkl_path, output_dir="cluster_results", max_steps=10, clust
 
 if __name__ == "__main__":
     # 使用示例
-    pkl_path = "1.pkl"  # 修改为您的pkl文件路径
+    pkl_path = "3.pkl"  # 修改为您的pkl文件路径
     output_dir = "cluster_analysis_results_0_2"
     
     # 参数说明：

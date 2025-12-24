@@ -743,7 +743,8 @@ class MAR(nn.Module):
                     index, idx_cluster = cluster_dpc_knn(
                         x_knn, 
                         self.token_num,
-                        k=2
+                        k=2,
+                        token_mask=mask,
                     )
                     index, _ = torch.sort(index)
 
