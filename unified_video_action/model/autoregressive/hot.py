@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from einops import rearrange, repeat
 from typing import Optional, Type
+import numpy as np
 
 
 def index_points(points, idx):
@@ -16,7 +17,7 @@ def index_points(points, idx):
     return new_points
 
 
-def cluster_dpc_knn(x, cluster_num, k, token_mask=None):
+def cluster_dpc_knn(x, cluster_num, k=2, token_mask=None):
     with torch.no_grad():
         B, N, C = x.shape
 
@@ -61,6 +62,80 @@ def cluster_dpc_knn(x, cluster_num, k, token_mask=None):
 
     return index_down, idx_cluster
 
+
+def select_channel(x, select_ratio=0.3, temporal_ratio=0.5, token_mask=None, num_frames=4):
+    with torch.no_grad():
+        B, N, C = x.shape
+        num_channels = N // num_frames
+        device = x.device
+        x_reshaped = x.view(B, num_frames, num_channels, C)
+        
+        frame_i = x_reshaped[:, :-1, :, :]
+        frame_j = x_reshaped[:, 1:, :, :]
+        distances = torch.norm(frame_i - frame_j, dim=-1)
+        
+        max_distance_per_channel, _ = torch.max(distances, dim=1)
+        
+        if token_mask is not None:
+            if token_mask.dim() == 2:  # [B, 1024]
+                mask_reshaped = token_mask.view(B, num_frames, num_channels)
+            else:  # [B, 4, 256]
+                mask_reshaped = token_mask
+            
+            valid_channels = mask_reshaped.any(dim=1)  # [B, 256]
+            max_distance_per_channel = max_distance_per_channel.masked_fill(~valid_channels, -float('inf'))
+        select_num = max(1, int(num_channels * select_ratio * temporal_ratio))
+        _, selected_channels = torch.topk(max_distance_per_channel, k=select_num, dim=-1)  # [B, select_num]
+        frame_indices = torch.arange(num_frames, device=device).view(1, 1, num_frames)
+        channel_indices_expanded = selected_channels.unsqueeze(-1).expand(-1, -1, num_frames)
+        batch_indices = frame_indices * num_channels + channel_indices_expanded
+        
+        index_down = batch_indices.reshape(B, -1)  # [B, select_num * num_frames]
+        cluster_indices2, cluster_labels = cluster_dpc_knn(
+            x, 
+            cluster_num=int(N*select_ratio*temporal_ratio), 
+            k=2
+        )
+        
+        if isinstance(cluster_indices2, np.ndarray):
+            cluster_indices2 = torch.from_numpy(cluster_indices2).to(device)
+        
+        if cluster_indices2.dim() == 1:
+            cluster_indices2 = cluster_indices2.unsqueeze(0).expand(B, -1)
+        elif cluster_indices2.dim() == 2 and cluster_indices2.shape[0] == 1:
+            cluster_indices2 = cluster_indices2.expand(B, -1)
+        
+        batch_selected_indices = []
+
+        target_num = int(N * select_ratio)
+
+        for i in range(B):
+            combined = torch.cat([
+                index_down[i].flatten(),
+                cluster_indices2[i].flatten()
+            ])
+
+            unique_indices = torch.unique(combined)
+            current_num = unique_indices.numel()
+
+            if current_num < target_num:
+                needed_num = target_num - current_num
+                all_token_indices = torch.arange(N, device=unique_indices.device)
+
+                mask = ~torch.isin(all_token_indices, unique_indices)
+                available_indices = all_token_indices[mask]
+                torch.manual_seed(i)
+
+                perm = torch.randperm(available_indices.numel(), device=unique_indices.device)
+                additional_indices = available_indices[perm[:needed_num]]
+                final_indices = torch.cat([unique_indices, additional_indices])
+            else:
+                final_indices = unique_indices
+
+            batch_selected_indices.append(final_indices)
+        batch_selected_indices = torch.stack(batch_selected_indices)
+
+        return batch_selected_indices
 
 class CrossAttention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.):

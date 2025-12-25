@@ -12,7 +12,7 @@ from torch.utils.checkpoint import checkpoint
 from timm.models.vision_transformer import Block
 from unified_video_action.model.autoregressive.diffusion_loss import DiffLoss
 from unified_video_action.model.autoregressive.diffusion_action_loss import DiffActLoss
-from unified_video_action.model.autoregressive.hot import CrossAttention, cluster_dpc_knn
+from unified_video_action.model.autoregressive.hot import CrossAttention, cluster_dpc_knn, select_channel
 
 
 def mask_by_order(mask_len, order, bsz, seq_len, device):
@@ -106,6 +106,7 @@ class MAR(nn.Module):
         self.selected_token_index = None
         self.hot_input_token = None
         self.print_token_index = True
+        self.select_ratio = hot_select_ratio
 
 
 
@@ -740,13 +741,16 @@ class MAR(nn.Module):
                     x_knn = x                      
                     self.hot_input_token = x
 
-                    index, idx_cluster = cluster_dpc_knn(
+                    """index, idx_cluster = cluster_dpc_knn(
                         x_knn, 
                         self.token_num,
                         k=2,
                         token_mask=mask,
-                    )
-                    index, _ = torch.sort(index)
+                    )"""
+
+                    index = select_channel(x, select_ratio=self.select_ratio)
+
+                    #index, _ = torch.sort(index)
 
                     batch = torch.arange(B, device=x.device).unsqueeze(-1)
                     x = x[batch, index]               # [b, token_num, c]

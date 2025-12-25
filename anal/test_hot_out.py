@@ -4,6 +4,7 @@ import torch
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import os
+from matplotlib.lines import Line2D  # 添加这行
 from scipy.spatial.distance import cdist
 
 def index_points(points, idx):
@@ -68,26 +69,23 @@ def cluster_dpc_knn(x, cluster_num, k=5, token_mask=None):
 
     return index_down.cpu().numpy(), idx_cluster.cpu().numpy()
 
-
-def select_channel(x, select_ratio=0.3, token_mask=None, num_frames=4):
+def select_channel(x, select_ratio=0.3, temporal_ratio=0.5, token_mask=None, num_frames=4):
     with torch.no_grad():
         B, N, C = x.shape
         num_channels = N // num_frames
         
-        # 计算每对帧之间的欧氏距离
-        max_distance_per_channel = torch.zeros(B, num_channels, device=x.device)
+        device = x.device
         
-        # 遍历所有帧对
-        for i in range(num_frames-1):
-            # 计算帧i和帧j所有通道的欧氏距离 [B, 256]
-            frame_i = x[:, i*num_channels:(i+1)*num_channels]  # [B, 256, C]
-            frame_j = x[:, (i+1)*num_channels:(i+2)*num_channels]  # [B, 256, C]
-            
-            # 计算每个通道的768维距离
-            distance = torch.norm(frame_i - frame_j, dim=-1)  # [B, 256]
-            
-            # 更新最大距离
-            max_distance_per_channel = torch.maximum(max_distance_per_channel, distance)
+        # 重塑为 [B, num_frames, num_channels, C]
+        x_reshaped = x.view(B, num_frames, num_channels, C)
+        
+        # 计算连续帧对的距离
+        frame_i = x_reshaped[:, :-1, :, :]
+        frame_j = x_reshaped[:, 1:, :, :]
+        distances = torch.norm(frame_i - frame_j, dim=-1)
+        
+        # 取每个通道的最大距离
+        max_distance_per_channel, _ = torch.max(distances, dim=1)
         
         # 处理掩码
         if token_mask is not None:
@@ -101,29 +99,67 @@ def select_channel(x, select_ratio=0.3, token_mask=None, num_frames=4):
             max_distance_per_channel = max_distance_per_channel.masked_fill(~valid_channels, -float('inf'))
         
         # 选择距离最大的通道
-        select_num = max(1, int(num_channels * select_ratio))
+        select_num = max(1, int(num_channels * select_ratio * temporal_ratio))
+
         _, selected_channels = torch.topk(max_distance_per_channel, k=select_num, dim=-1)  # [B, select_num]
         
-        # 还原到1024token的索引
-        batch_indices = []
-        for b in range(B):
-            indices = []
-            for ch_idx in selected_channels[b]:
-                # 这个通道在4帧中的位置
-                for frame in range(num_frames):
-                    indices.append(frame * num_channels + ch_idx.item())
-            batch_indices.append(indices)
+        # 生成所有帧的索引
+        frame_indices = torch.arange(num_frames, device=device).view(1, 1, num_frames)
+        channel_indices_expanded = selected_channels.unsqueeze(-1).expand(-1, -1, num_frames)
+        batch_indices = frame_indices * num_channels + channel_indices_expanded
         
-        # 转换为numpy数组
-        if B == 1:
-            # 单batch，直接返回1D数组
-            index_down = np.array(batch_indices[0], dtype=np.int64)
-        else:
-            # 多batch，返回2D数组
-            index_down = np.array(batch_indices, dtype=np.int64)
-        
-        return index_down
+        index_down = batch_indices.reshape(B, -1)  # [B, select_num * num_frames]
 
+        # 调用聚类函数
+        cluster_indices2, cluster_labels = cluster_dpc_knn(
+            x, 
+            cluster_num=int(N*select_ratio*temporal_ratio), 
+            k=2
+        )
+        
+        # 确保cluster_indices2是tensor并移到正确设备
+        if isinstance(cluster_indices2, np.ndarray):
+            cluster_indices2 = torch.from_numpy(cluster_indices2).to(device)
+        
+        # 如果cluster_indices2是一维的，可能是聚类中心索引，为每个批次复制
+        if cluster_indices2.dim() == 1:
+            cluster_indices2 = cluster_indices2.unsqueeze(0).expand(B, -1)
+        elif cluster_indices2.dim() == 2 and cluster_indices2.shape[0] == 1:
+            # 如果是二维但只有一批，扩展到所有批次
+            cluster_indices2 = cluster_indices2.expand(B, -1)
+        
+        batch_selected_indices = []
+
+        target_num = int(N * select_ratio)
+
+        for i in range(B):
+            combined = torch.cat([
+                index_down[i].flatten(),
+                cluster_indices2[i].flatten()
+            ])
+
+            unique_indices = torch.unique(combined)
+            current_num = unique_indices.numel()
+
+            if current_num < target_num:
+                needed_num = target_num - current_num
+                all_token_indices = torch.arange(N, device=unique_indices.device)
+
+                mask = ~torch.isin(all_token_indices, unique_indices)
+                available_indices = all_token_indices[mask]
+                torch.manual_seed(i)
+
+                perm = torch.randperm(available_indices.numel(), device=unique_indices.device)
+                additional_indices = available_indices[perm[:needed_num]]
+                final_indices = torch.cat([unique_indices, additional_indices])
+            else:
+                final_indices = unique_indices
+
+            batch_selected_indices.append(final_indices)
+        batch_selected_indices = torch.stack(batch_selected_indices)
+
+        return batch_selected_indices
+    
 
 class ClusterVisualizer:
     def __init__(self, 
@@ -156,14 +192,15 @@ class ClusterVisualizer:
         return frame_idx, row, col
     
     def visualize_cluster_results(self, raw_images, hot_input_token, step_idx, 
-                                 cluster_indices, original_indices, save_dir="cluster_visualizations"):
+                                cluster_indices, original_indices, save_dir="cluster_visualizations"):
         """
         可视化聚类结果
         
         raw_images: [1, 16, 3, 96, 96] 原始16帧
         hot_input_token: [B, N, C] 热点输入token
         step_idx: 步骤索引
-        cluster_indices: 聚类选择的indices [n_clusters]
+        cluster_indices: 聚类选择的indices 
+            新格式：长度为B的列表，每个元素是批次的索引数组（或单个numpy数组，B=1时）
         original_indices: 原始模型选择的indices [n_selected]
         """
         os.makedirs(save_dir, exist_ok=True)
@@ -174,12 +211,59 @@ class ClusterVisualizer:
         print(f"\n=== Visualizing Step {step_idx} ===")
         print(f"Raw images shape: {raw_images.shape}")
         print(f"Hot input token shape: {hot_input_token.shape}")
-        print(f"Cluster selected {len(cluster_indices)} tokens")
+        
+        # 处理cluster_indices的格式（适配新的select_channel返回格式）
+        if isinstance(cluster_indices, list):
+            # 新的select_channel返回格式：列表，每个元素是一个批次的索引
+            print(f"cluster_indices is list with {len(cluster_indices)} batches")
+            
+            # 检查列表中的元素类型
+            batch_results = []
+            for i, batch_cluster in enumerate(cluster_indices):
+                if isinstance(batch_cluster, np.ndarray):
+                    batch_results.append(batch_cluster)
+                elif isinstance(batch_cluster, torch.Tensor):
+                    batch_results.append(batch_cluster.cpu().numpy())
+                else:
+                    # 尝试转换为numpy数组
+                    batch_results.append(np.array(batch_cluster))
+            
+            # 默认使用第一个批次的索引（假设batch_size=1或我们只关心第一个样本）
+            if len(batch_results) > 0:
+                cluster_indices_array = batch_results[0]
+                print(f"Using first batch with {len(cluster_indices_array)} indices")
+            else:
+                cluster_indices_array = np.array([])
+                print("Warning: Empty cluster_indices list")
+        elif isinstance(cluster_indices, np.ndarray):
+            # 如果是numpy数组，直接使用（兼容旧格式）
+            cluster_indices_array = cluster_indices
+            print(f"cluster_indices is numpy array with shape {cluster_indices.shape}")
+        elif isinstance(cluster_indices, torch.Tensor):
+            # 如果是torch tensor，转换为numpy
+            cluster_indices_array = cluster_indices.cpu().numpy()
+            print(f"cluster_indices is torch tensor, converted to numpy array with shape {cluster_indices_array.shape}")
+        else:
+            # 其他类型，尝试转换
+            try:
+                cluster_indices_array = np.array(cluster_indices)
+                print(f"cluster_indices converted to numpy array with shape {cluster_indices_array.shape}")
+            except:
+                print(f"Error: Cannot convert cluster_indices type {type(cluster_indices)}")
+                cluster_indices_array = np.array([])
+        
+        # 确保cluster_indices_array是一维数组
+        if cluster_indices_array.ndim > 1:
+            cluster_indices_array = cluster_indices_array.flatten()
+        
+        print(f"Cluster selected {len(cluster_indices_array)} tokens")
         print(f"Original model selected {len(original_indices)} tokens")
         
         # 分析聚类选择的分布
         cluster_frame_dist = {}
-        for token_idx in cluster_indices:
+        for token_idx in cluster_indices_array:
+            # 确保token_idx是标量
+            token_idx = int(token_idx)
             frame_idx, row, col = self.token_to_frame_and_position(token_idx)
             if frame_idx not in cluster_frame_dist:
                 cluster_frame_dist[frame_idx] = []
@@ -188,6 +272,8 @@ class ClusterVisualizer:
         # 分析原始选择的分布
         original_frame_dist = {}
         for token_idx in original_indices:
+            # 确保token_idx是标量
+            token_idx = int(token_idx)
             frame_idx, row, col = self.token_to_frame_and_position(token_idx)
             if frame_idx not in original_frame_dist:
                 original_frame_dist[frame_idx] = []
@@ -199,7 +285,7 @@ class ClusterVisualizer:
         # 创建对比可视化
         fig, axes = plt.subplots(4, 4, figsize=(20, 16))
         fig.suptitle(f'Step {step_idx}: Clustering vs Original Selection\n'
-                    f'Cluster: {len(cluster_indices)} | Original: {len(original_indices)}',
+                    f'Cluster: {len(cluster_indices_array)} | Original: {len(original_indices)}',
                     fontsize=16)
         
         for i, orig_frame_idx in enumerate(condition_frame_indices):
@@ -325,7 +411,6 @@ class ClusterVisualizer:
             ax4.axis('off')
         
         # 添加图例
-        from matplotlib.lines import Line2D
         legend_elements = [
             Line2D([0], [0], color='blue', lw=2, label='Cluster Selection'),
             Line2D([0], [0], color='red', lw=2, label='Original Selection'),
@@ -340,13 +425,33 @@ class ClusterVisualizer:
         
         print(f"Cluster visualization saved: {save_path}")
         
-        # 创建统计分析
-        self.create_cluster_analysis(cluster_indices, original_indices, step_idx, save_dir)
+        # 创建统计分析（使用处理后的数组）
+        self.create_cluster_analysis(cluster_indices_array, original_indices, step_idx, save_dir)
         
         return overlap_count
     
     def create_cluster_analysis(self, cluster_indices, original_indices, step_idx, save_dir):
         """创建聚类统计分析"""
+        # 确保输入是可迭代的Python列表（处理新格式）
+        if isinstance(cluster_indices, list):
+            # 如果是列表，可能是多批次结果，取第一个批次
+            if len(cluster_indices) > 0:
+                if isinstance(cluster_indices[0], np.ndarray):
+                    cluster_indices = cluster_indices[0].tolist()
+                elif isinstance(cluster_indices[0], torch.Tensor):
+                    cluster_indices = cluster_indices[0].cpu().numpy().tolist()
+                else:
+                    cluster_indices = list(cluster_indices[0])
+            else:
+                cluster_indices = []
+        elif isinstance(cluster_indices, np.ndarray):
+            cluster_indices = cluster_indices.tolist()
+        
+        if isinstance(original_indices, np.ndarray):
+            original_indices = original_indices.tolist()
+        elif isinstance(original_indices, torch.Tensor):
+            original_indices = original_indices.cpu().numpy().tolist()
+        
         # 计算重叠统计
         cluster_set = set(cluster_indices)
         original_set = set(original_indices)
@@ -365,10 +470,12 @@ class ClusterVisualizer:
         original_frames = {}
         
         for token_idx in cluster_indices:
+            token_idx = int(token_idx)  # 确保是整数
             frame_idx, _, _ = self.token_to_frame_and_position(token_idx)
             cluster_frames[frame_idx] = cluster_frames.get(frame_idx, 0) + 1
         
         for token_idx in original_indices:
+            token_idx = int(token_idx)  # 确保是整数
             frame_idx, _, _ = self.token_to_frame_and_position(token_idx)
             original_frames[frame_idx] = original_frames.get(frame_idx, 0) + 1
         
@@ -432,6 +539,7 @@ class ClusterVisualizer:
         all_rows, all_cols, colors, sizes = [], [], [], []
         
         for token_idx in cluster_indices:
+            token_idx = int(token_idx)
             _, row, col = self.token_to_frame_and_position(token_idx)
             all_rows.append(row)
             all_cols.append(col)
@@ -439,7 +547,8 @@ class ClusterVisualizer:
             sizes.append(50 if token_idx not in overlap_set else 80)
         
         for token_idx in original_indices:
-            if token_idx not in cluster_indices:  # 只添加不在cluster中的点
+            token_idx = int(token_idx)
+            if token_idx not in cluster_set:  # 只添加不在cluster中的点
                 _, row, col = self.token_to_frame_and_position(token_idx)
                 all_rows.append(row)
                 all_cols.append(col)
@@ -478,6 +587,7 @@ class ClusterVisualizer:
         
         print(f"Cluster analysis saved: {save_path}")
         print(f"Cluster stats saved: {stats_path}")
+
 
 def process_pkl_file(pkl_path, output_dir="cluster_results", max_steps=10, cluster_num=307, k=5):
     """
@@ -539,24 +649,23 @@ def process_pkl_file(pkl_path, output_dir="cluster_results", max_steps=10, clust
         else:
             hot_input_tensor = hot_input_token.float()
         
-        # 执行聚类
+        # 执行聚类（使用新的select_channel函数）
         print(f"Running DPC-KNN clustering (k={k}, clusters={cluster_num})...")
 
-        cluster_indices = select_channel(hot_input_tensor, select_ratio=0.1)
-        cluster_indices2, cluster_labels = cluster_dpc_knn(
-            hot_input_tensor, 
-            cluster_num=100, 
-            k=k
-        )
+        cluster_indices = select_channel(hot_input_tensor, select_ratio=0.3)
         
-        combined_indices = np.concatenate([cluster_indices.flatten(), cluster_indices2.flatten()])
-        unique_sorted_indices = np.unique(combined_indices)
-        
-        # cluster_indices是聚类中心的索引
-        cluster_indices = unique_sorted_indices.flatten()  # [cluster_num]
-        
-        print(f"Cluster selected {len(cluster_indices)} tokens")
-        print(f"Cluster indices range: {cluster_indices.min()} to {cluster_indices.max()}")
+        # 打印聚类结果信息
+        if isinstance(cluster_indices, list):
+            print(f"select_channel returned list with {len(cluster_indices)} batches")
+            for i, batch_indices in enumerate(cluster_indices):
+                if hasattr(batch_indices, 'shape'):
+                    print(f"  Batch {i}: {batch_indices.shape} indices")
+                else:
+                    print(f"  Batch {i}: {len(batch_indices)} indices")
+        else:
+            print(f"select_channel returned: {type(cluster_indices)}")
+            if hasattr(cluster_indices, 'shape'):
+                print(f"Shape: {cluster_indices.shape}")
         
         # 可视化结果
         overlap_count = visualizer.visualize_cluster_results(
@@ -594,6 +703,7 @@ def process_pkl_file(pkl_path, output_dir="cluster_results", max_steps=10, clust
         
         print(f"\nAll visualizations and analyses saved to: {output_dir}")
         print(f"Overall statistics saved: {overall_stats_path}")
+
 
 if __name__ == "__main__":
     # 使用示例
