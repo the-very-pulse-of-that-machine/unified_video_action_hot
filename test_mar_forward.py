@@ -10,7 +10,7 @@ from functools import partial
 from einops import rearrange
 
 # 导入MAR模型
-from unified_video_action.model.autoregressive.mar_con_unified_expand_hot import mar_base
+from unified_video_action.model.autoregressive.mar_con_unified_e_h_ttt import mar_base
 
 def test_forward_simple():
     """简单测试MAR模型的前向传播"""
@@ -61,7 +61,7 @@ def test_forward_simple():
             "predict_action": True,
             "act_model_type": "conv_fc"
         },
-        hot_select_ratio=0.3,
+        hot_select_ratio=0.125,
         hot_layer_index=3,
         **kwargs
     )
