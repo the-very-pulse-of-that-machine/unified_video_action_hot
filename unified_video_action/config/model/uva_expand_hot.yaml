@@ -47,7 +47,7 @@ policy:
     #
     act_diff_training_steps: 1000
     act_diff_testing_steps: "100"
-    hot_select_ratio: 0.3
+    hot_select_ratio: 0.1
     
   action_model_params:
     predict_action: False
