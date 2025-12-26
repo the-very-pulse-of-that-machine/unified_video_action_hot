@@ -107,6 +107,7 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
             task_name=self.task_name,
             language_emb_model=language_emb_model,
             shape_meta=shape_meta,
+            hot_select_ratio=autoregressive_model_params.hot_select_ratio
         )
 
         ## =========================== load pretrained model ===========================
