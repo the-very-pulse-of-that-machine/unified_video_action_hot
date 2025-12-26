@@ -741,16 +741,16 @@ class MAR(nn.Module):
                     x_knn = x                      
                     self.hot_input_token = x
 
-                    """index, idx_cluster = cluster_dpc_knn(
+                    index, idx_cluster = cluster_dpc_knn(
                         x_knn, 
                         self.token_num,
                         k=2,
                         token_mask=mask,
-                    )"""
+                    )
 
-                    index = select_channel(x, select_ratio=self.select_ratio)
+                    #index = select_channel(x, select_ratio=self.select_ratio)
 
-                    #index, _ = torch.sort(index)
+                    index, _ = torch.sort(index)
 
                     batch = torch.arange(B, device=x.device).unsqueeze(-1)
                     x = x[batch, index]               # [b, token_num, c]
