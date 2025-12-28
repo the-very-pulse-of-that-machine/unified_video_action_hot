@@ -1,7 +1,7 @@
-_target_: unified_video_action.workspace.train_unified_video_action_expand_hot_workspace.TrainUnifiedVideoActionWorkspace
+_target_: unified_video_action.workspace.train_unified_video_action_ttt_workspace.TrainUnifiedVideoActionWorkspace
 
 policy:
-  _target_: unified_video_action.policy.unified_video_action_policy_expand_hot.UnifiedVideoActionPolicy
+  _target_: unified_video_action.policy.unified_video_action_policy_ttt.UnifiedVideoActionPolicy
   selected_training_mode: null
   debug: None
   n_action_steps: 8
@@ -47,7 +47,6 @@ policy:
     #
     act_diff_training_steps: 1000
     act_diff_testing_steps: "100"
-    hot_select_ratio: 0.3
     
   action_model_params:
     predict_action: False
@@ -61,6 +60,5 @@ policy:
     betas:
     - 0.9
     - 0.95
-
 
 
