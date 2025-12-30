@@ -1,8 +1,12 @@
+stage label: video_only, video_action
+model label: hot, expand_hot, expand_hot_v2, expand_hot_v3, e_h_ttt, ttt
+temporal label: neo(this label means discard the old one with other same labels)
+pretrain label: fix(discard) ofix(origin video model) tttfix(ttt video model)
+
+
 accelerate launch --num_processes=1 train.py     --config-dir=.     --config-name=uva_hot_pusht.yaml     model.policy.action_model_params.predict_action=False     model.policy.selected_training_mode=video_model     model.policy.optimizer.learning_rate=1e-4     logging.project=uva     hydra.run.dir="checkpoints/uva_pusht_video_model"
 
-
-
-  accelerate launch --num_processes=1 train.py \
+accelerate launch --num_processes=1 train.py \
     --config-dir=. \
     --config-name=uva_hot_pusht.yaml \
     model.policy.autoregressive_model_params.pretrained_model_path=checkpoints/test2/checkpoints/latest.ckpt \
@@ -11,8 +15,7 @@ accelerate launch --num_processes=1 train.py     --config-dir=.     --config-nam
     logging.project=uva \
     hydra.run.dir="checkpoints/test_act1"
 
-
-
 python eval_sim.py --checkpoint checkpoints/uva_hot_pusht_video_model/checkpoints/latest.ckpt --output_dir checkpoints/pusht 
 
 python eval_sim_time_full.py --checkpoint checkpoints/pusht.ckpt --output_dir checkpoints/pusht  --dataset_path data/pusht/pusht_one_episode.zarr
+
