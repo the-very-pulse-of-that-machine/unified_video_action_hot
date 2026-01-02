@@ -20,7 +20,7 @@ val_dataloader:
   shuffle: false
 
 training:
-  checkpoint_every: 5
+  checkpoint_every: 1
   debug: false
   device: cuda:0
   gradient_accumulate_every: 1
