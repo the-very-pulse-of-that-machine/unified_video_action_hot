@@ -217,18 +217,8 @@ class MultiRegionRandomSampler(ObjectPositionSampler):
         # print(placed_objects)
         return placed_objects
 
-
+"""
 def postprocess_model_xml(xml_str, cameras_dict={}, demo_generation=False):
-    """
-    This function postprocesses the model.xml collected from a MuJoCo demonstration
-    in order to make sure that the STL files can be found.
-
-    Args:
-        xml_str (str): Mujoco sim demonstration XML file as string
-
-    Returns:
-        str: Post-processed xml file as string
-    """
 
     path = os.path.split(robosuite.__file__)[0]
     path_split = path.split("/")
@@ -277,7 +267,7 @@ def postprocess_model_xml(xml_str, cameras_dict={}, demo_generation=False):
             camera.set("quat", cameras_dict[camera_name]["quat"])
             camera.set("mode", "fixed")
 
-    return ET.tostring(root, encoding="utf8").decode("utf8")
+    return ET.tostring(root, encoding="utf8").decode("utf8")"""
 
 
 def rectangle2xyrange(rect_ranges):
