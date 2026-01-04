@@ -3,6 +3,8 @@ Usage:
 Training:
 python train.py --config-name=train_diffusion_lowdim_workspace
 """
+import multiprocessing as mp
+mp.set_start_method("spawn", force=True)
 
 import torch
 import os
