@@ -1,7 +1,7 @@
 import os
 import xml.etree.ElementTree as ET
 import robosuite
-from robosuite.utils.mjcf_utils import find_elements
+#from robosuite.utils.mjcf_utils import find_elements
 import numpy as np
 import json
 import torch

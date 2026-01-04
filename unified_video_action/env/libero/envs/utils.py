@@ -5,7 +5,7 @@ import robosuite
 import xml.etree.ElementTree as ET
 
 from copy import copy
-from robosuite.utils.mjcf_utils import find_elements, xml_path_completion
+#from robosuite.utils.mjcf_utils import find_elements, xml_path_completion
 from robosuite.utils.placement_samplers import ObjectPositionSampler
 
 
