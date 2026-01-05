@@ -377,6 +377,8 @@ class TrainUnifiedVideoActionWorkspace(BaseWorkspace):
                     new_key = key.replace("/", "_")
                     metric_dict[new_key] = value
                     print(metric_dict.key())
+                print("Available metrics:", metric_dict.keys())
+
 
                 # save topk checkpoints
                 topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
