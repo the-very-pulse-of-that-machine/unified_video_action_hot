@@ -6,14 +6,14 @@ defaults:
   - model: uva
 
 dataloader:
-  batch_size: 32
+  batch_size: 28
   num_workers: 8
   persistent_workers: false
   pin_memory: true
   shuffle: true
 
 val_dataloader:
-  batch_size: 32
+  batch_size: 28
   num_workers: 8
   persistent_workers: false
   pin_memory: true
