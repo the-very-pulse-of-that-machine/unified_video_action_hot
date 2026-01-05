@@ -20,8 +20,8 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 import wandb
 
-if "WANDB_API_KEY" in os.environ:
-    wandb.login(key=os.environ["WANDB_API_KEY"])
+#if "WANDB_API_KEY" in os.environ:
+    #wandb.login(key=os.environ["WANDB_API_KEY"])
 
 
 @hydra.main(
