@@ -239,7 +239,8 @@ class LiberoImageRunner(BaseImageRunner):
             env_prefixs.append("test/%s_" % env_meta["bddl_file"].split("/")[-1][:-5])
             env_init_fn_dills.append(dill.dumps(init_fn))
 
-        env = AsyncVectorEnv(env_fns, dummy_env_fn=dummy_env_fn, shared_memory=False, context='spawn')
+        env = AsyncVectorEnv(env_fns, dummy_env_fn=dummy_env_fn, shared_memory=False)
+
         self.env_meta = env_meta
         self.env = env
         self.env_fns = env_fns
