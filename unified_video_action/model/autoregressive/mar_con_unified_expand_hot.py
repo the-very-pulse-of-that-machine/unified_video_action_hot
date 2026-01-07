@@ -686,6 +686,7 @@ class MAR(nn.Module):
         ).reshape(-1, T * S, embed_dim)
 
         x = x + combined_pos_embed
+        image_latents = x
 
         # ---------------------------------------------------------------------
         # 🟦 8. 文本 embedding 插入（用于条件生成）
@@ -734,29 +735,74 @@ class MAR(nn.Module):
                 #print(i)
                 #print(x.size())
                 if i == self.layer_index:
-                    #print("hot")
+                    assert index.shape[1] == (
+                        (self.buffer_size_text if self.language_emb_model == "clip" else 0)
+                        + self.token_num
+                    ), f"Token number mismatch: {index.shape}"
                     _, L, C = x.size()
                     self.original_token_num = L
-                    # x: [b, L, c]
-                    x_knn = x                      
                     self.hot_input_token = x
 
-                    """index, idx_cluster = cluster_dpc_knn(
-                        x_knn, 
-                        self.token_num,
+                    # --------------------------------------------------
+                    # 1️⃣ 拆分 text / image token
+                    # --------------------------------------------------
+                    if self.language_emb_model == "clip" and self.language_emb_model_type == 1:
+                        text_len = self.buffer_size_text
+                        x_text = x[:, :text_len]          # [B, Lt, C]
+                        x_image = x[:, text_len:]         # [B, Li, C]
+                    else:
+                        text_len = 0
+                        x_text = None
+                        x_image = x                       # 全是 image token
+
+                    # 对应的 image mask
+                    image_mask = None
+                    if mask is not None:
+                        image_mask = mask[:, : x_image.size(1)]
+
+                    # --------------------------------------------------
+                    # 2️⃣ 只对 image token 做压缩
+                    # --------------------------------------------------
+                    index_image, idx_cluster = cluster_dpc_knn(
+                        x_image,
+                        self.token_num,           # 选 image token 数
                         k=2,
-                        token_mask=mask,
-                    )"""
+                        token_mask=image_mask,
+                    )
 
-                    index = select_channel(x, select_ratio=self.select_ratio)
+                    index_image, _ = torch.sort(index_image)
 
-                    index, _ = torch.sort(index)
-
+                    # --------------------------------------------------
+                    # 3️⃣ 构造最终 index（text 全保留 + image index 偏移）
+                    # --------------------------------------------------
                     batch = torch.arange(B, device=x.device).unsqueeze(-1)
-                    x = x[batch, index]               # [b, token_num, c]
+
+                    if text_len > 0:
+                        # text index: [0, 1, ..., Lt-1]
+                        index_text = torch.arange(
+                            text_len, device=x.device
+                        ).unsqueeze(0).expand(B, -1)
+
+                        # image index 要整体 + text_len
+                        index_image_global = index_image + text_len
+
+                        # concat
+                        index = torch.cat([index_text, index_image_global], dim=1)
+                    else:
+                        index = index_image
+
+                    # --------------------------------------------------
+                    # 4️⃣ 根据最终 index 选 token
+                    # --------------------------------------------------
+                    x = x[batch, index]                       # [B, Lt + K, C]
                     self.selected_token_index = index
 
-                    x = x + self.pos_embed_token[:self.token_num]
+                    # 只给 image token 加 token-level pos embed
+                    if text_len > 0:
+                        x[:, text_len:] = x[:, text_len:] + self.pos_embed_token[: self.token_num]
+                    else:
+                        x = x + self.pos_embed_token[: self.token_num]
+
 
 
         # 最终编码后的序列
