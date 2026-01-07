@@ -735,10 +735,6 @@ class MAR(nn.Module):
                 #print(i)
                 #print(x.size())
                 if i == self.layer_index:
-                    assert index.shape[1] == (
-                        (self.buffer_size_text if self.language_emb_model == "clip" else 0)
-                        + self.token_num
-                    ), f"Token number mismatch: {index.shape}"
                     _, L, C = x.size()
                     self.original_token_num = L
                     self.hot_input_token = x
@@ -790,7 +786,10 @@ class MAR(nn.Module):
                         index = torch.cat([index_text, index_image_global], dim=1)
                     else:
                         index = index_image
-
+                    assert index.shape[1] == (
+                        (self.buffer_size_text if self.language_emb_model == "clip" else 0)
+                        + self.token_num
+                    ), f"Token number mismatch: {index.shape}"
                     # --------------------------------------------------
                     # 4️⃣ 根据最终 index 选 token
                     # --------------------------------------------------
