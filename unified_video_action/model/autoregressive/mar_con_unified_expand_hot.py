@@ -813,6 +813,7 @@ class MAR(nn.Module):
     def forward_mae_decoder(self, x, mask):
         # mask 形状为 [B, T, S]
         B, T, S = mask.size()
+        text_len = self.buffer_size_text
 
         # 展平 mask: [B, T, S] -> [B, T*S]
         mask = rearrange(mask, "b t s -> b (t s)")
@@ -886,23 +887,30 @@ class MAR(nn.Module):
             for i, block in enumerate(self.decoder_blocks):
                 x = block(x)
 
-                if i == self.encoder_depth - 1:
-                    b, K, c = x.shape
-                    #print("recover")
-                    # 1) 可学习 token 作为 Query 来恢复 token
-                    #    x_token: [1, L, c] → expand 成 [b, L, c]
-                    x_token = repeat(self.recover_token, '() L c -> b L c', b=b)
+            if i == self.encoder_depth - 1:
+                b, K, c = x.shape
+                # ---- 分离语言 token ----
+                if self.language_emb_model == "clip" and self.language_emb_model_type == 1:
+                    text_len = self.buffer_size_text
+                    x_text = x[:, :text_len]  # [B, Lt, C]
+                    x_video = x[:, text_len:] # [B, Lv, C]
+                else:
+                    x_text = None
+                    x_video = x
 
-                    # 2) Cross Attention:
-                    #    Query = 可学习 token（表示希望恢复哪些 token）
-                    #    Key/Value = 聚类后的 token（表示保留的关键信息）
-                    x_recover = x_token + self.cross_attention(
-                        x_token,   # Q
-                        x,         # K
-                        x          # V
-                    )              # -> [b, L, c]
+                # ---- 视频 token 做恢复 ----
+                x_token = repeat(self.recover_token, '() L c -> b L c', b=b)
+                x_video_recover = x_token + self.cross_attention(
+                    x_token,   # Q
+                    x_video,   # K
+                    x_video    # V
+                )
 
-                    x = x_recover
+                # ---- 拼回文本 token ----
+                if x_text is not None:
+                    x = torch.cat([x_text, x_video_recover], dim=1)
+                else:
+                    x = x_video_recover
                     #print(x.size())
                 #print(x.size())
 
