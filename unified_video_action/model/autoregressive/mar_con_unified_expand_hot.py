@@ -844,17 +844,10 @@ class MAR(nn.Module):
 
         # 两者相加，得到每个 patch 对应的时空位置编码
         # reshape → [1, T*S, C]
-        decoder_full_decoder_pos = (
+        decoder_combined_pos_embed = (
             decoder_temporal_pos_embed_expanded + decoder_spatial_pos_embed_expanded
         ).reshape(1, T * S, embed_dim)
 
-        index = self.selected_token_index    # [B, K]
-        B, K = index.shape
-
-        decoder_full_decoder_pos = decoder_full_decoder_pos.expand(B, -1, -1)  # [B, T*S, C]
-        batch = torch.arange(B, device=x.device).unsqueeze(-1)
-
-        decoder_pos_selected = decoder_full_decoder_pos[batch, index] 
 
         # ---------------------------------------------------------------------
         # 🟦 2. 若有文本 embedding，则在 decoder 也要处理位置编码
@@ -862,18 +855,26 @@ class MAR(nn.Module):
 
         if self.language_emb_model == "clip":
             if self.language_emb_model_type == 1:
-                # text embedding 的 decoder 位置编码 concat 在最前
                 combined_pos_embed = torch.cat(
-                    [self.decoder_text_pos_embed, decoder_pos_selected],
-                    dim=1,
+                    [self.decoder_text_pos_embed, decoder_combined_pos_embed], dim=1
                 )
             else:
-                combined_pos_embed = decoder_pos_selected
+                combined_pos_embed = decoder_combined_pos_embed
         else:
-            combined_pos_embed = decoder_pos_selected
+            combined_pos_embed = decoder_combined_pos_embed
+
+        index = self.selected_token_index    # [B, K]
+        B, K = index.shape
+
+        decoder_full_decoder_pos = combined_pos_embed.expand(B, -1, -1)  # [B, T*S, C]
+        batch = torch.arange(B, device=x.device).unsqueeze(-1)
+
+        decoder_pos_selected = decoder_full_decoder_pos[batch, index] 
+
+
         #print(combined_pos_embed.size())
         # 加上 decoder 的位置编码
-        x = x + combined_pos_embed
+        x = x + decoder_pos_selected
 
         # ---------------------------------------------------------------------
         # 🟦 3. Transformer Decoder Blocks
