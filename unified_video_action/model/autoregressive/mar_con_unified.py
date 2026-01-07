@@ -658,72 +658,51 @@ class MAR(nn.Module):
 
         return x
 
-    def forward_mae_decoder(self, x, mask):
-        B, T, S = mask.size()
-        mask = rearrange(mask, "b t s -> b (t s)")
-        x = self.decoder_embed(x)
-        _, _, embed_dim = x.shape
+    # ---------------------------------------------------------------------
+# 1️⃣ 先拼接文本 token（如果有的话）
+# ---------------------------------------------------------------------
+if self.language_emb_model == "clip" and self.language_emb_model_type == 1:
+    # text_latents 已经在 decoder 输入里，直接使用 text_pos_embed
+    x = torch.cat([self.text_latents.expand(B, -1, -1), x], dim=1)
+    # 更新总 token 长度
+    total_token_len = x.size(1)
+    text_len = self.buffer_size_text
+else:
+    total_token_len = x.size(1)
+    text_len = 0
 
-        # ========= Position Embedding =========
-        decoder_temporal_pos_embed_expanded = self.decoder_temporal_pos_embed.unsqueeze(
-            2
-        ).expand(
-            -1, -1, S, -1
-        ) 
-        decoder_spatial_pos_embed_expanded = self.decoder_spatial_pos_embed.unsqueeze(
-            1
-        ).expand(
-            -1, T, -1, -1
-        ) 
-        decoder_combined_pos_embed = (
-            decoder_temporal_pos_embed_expanded + decoder_spatial_pos_embed_expanded
-        ).reshape(1, T * S, embed_dim)
+# ---------------------------------------------------------------------
+# 2️⃣ decoder token 投影
+# ---------------------------------------------------------------------
+x = self.decoder_embed(x)
+_, _, embed_dim = x.shape
 
-        # ========= Language Embedding =========
-        if self.language_emb_model == "clip":
-            if self.language_emb_model_type == 1:
-                combined_pos_embed = torch.cat(
-                    [self.decoder_text_pos_embed, decoder_combined_pos_embed], dim=1
-                )
-            else:
-                combined_pos_embed = decoder_combined_pos_embed
-        else:
-            combined_pos_embed = decoder_combined_pos_embed
+# ---------------------------------------------------------------------
+# 3️⃣ decoder 时空位置编码
+# ---------------------------------------------------------------------
+decoder_temporal_pos_embed_expanded = self.decoder_temporal_pos_embed.unsqueeze(2).expand(-1, -1, S, -1)
+decoder_spatial_pos_embed_expanded = self.decoder_spatial_pos_embed.unsqueeze(1).expand(-1, T, -1, -1)
+decoder_full_decoder_pos = (decoder_temporal_pos_embed_expanded + decoder_spatial_pos_embed_expanded).reshape(1, T*S, embed_dim)
+decoder_full_decoder_pos = decoder_full_decoder_pos.expand(B, -1, -1)
 
-        x = x + combined_pos_embed
+# ---------------------------------------------------------------------
+# 4️⃣ 根据 encoder 输出的 selected_token_index 选 token
+# ---------------------------------------------------------------------
+batch = torch.arange(B, device=x.device).unsqueeze(-1)
+x = x[batch, self.selected_token_index]                       # [B, K, C]
+decoder_pos_selected = decoder_full_decoder_pos[batch, self.selected_token_index]
 
-        # ========= Transformer Decoder Blocks =========
-        if self.grad_checkpointing and not torch.jit.is_scripting():
-            for block in self.decoder_blocks:
-                x = checkpoint(block, x)
-        else:
-            for block in self.decoder_blocks:
-                x = block(x)
-        x = self.decoder_norm(x)
+# ---------------------------------------------------------------------
+# 5️⃣ 加 text token 的位置编码（如果有的话）
+# ---------------------------------------------------------------------
+if text_len > 0:
+    decoder_pos_selected[:, :text_len] = self.decoder_text_pos_embed.expand(B, -1, -1)
 
-        # ========= Language Embedding =========
-        if self.language_emb_model == "clip":
-            if self.language_emb_model_type == 1:
-                x = x[:, self.buffer_size_text :]
+# ---------------------------------------------------------------------
+# 6️⃣ 最终加上 decoder 位置编码
+# ---------------------------------------------------------------------
+x = x + decoder_pos_selected
 
-        # ========= Diffusion Position Embedding =========
-        diffusion_temporal_pos_embed_expanded = self.diffusion_temporal_embed.unsqueeze(
-            2
-        ).expand(
-            -1, -1, S, -1
-        )
-        diffusion_spatial_pos_embed_expanded = self.diffusion_spatial_embed.unsqueeze(
-            1
-        ).expand(
-            -1, T, -1, -1
-        )
-        diffusion_combined_pos_embed = (
-            diffusion_temporal_pos_embed_expanded + diffusion_spatial_pos_embed_expanded
-        ).reshape(1, T * S, embed_dim)
-
-        x = x + diffusion_combined_pos_embed
-
-        return x
 
     def forward_loss(
         self,
