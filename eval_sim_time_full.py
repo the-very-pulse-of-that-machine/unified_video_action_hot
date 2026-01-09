@@ -152,14 +152,13 @@ def main(checkpoint, output_dir, device, dataset_path):
     # Run environments
     env_runners = load_env_runner(cfg, output_dir)
 
-    example_env = env_runners[0] if isinstance(env_runners, list) else env_runners
-    example_obs = example_env.env.reset()  # 返回 dict of numpy arrays
-
-    # 只跑一次前向
-    print("[Profiler] Running forward-only profiling ...")
-    profile_forward(policy, example_obs, device)
-
     if "libero" in cfg.task.name:
+        example_env = env_runners[0] if isinstance(env_runners, list) else env_runners
+        example_obs = example_env.env.reset()  # 返回 dict of numpy arrays
+
+        # 只跑一次前向
+        print("[Profiler] Running forward-only profiling ...")
+        profile_forward(policy, example_obs, device)
         step_log = {}
         for env_runner in env_runners:
             runner_log = env_runner.run(policy)
