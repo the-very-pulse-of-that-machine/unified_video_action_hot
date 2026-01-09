@@ -20,6 +20,37 @@ from unified_video_action.workspace.base_workspace import BaseWorkspace
 from unified_video_action.utils.load_env import load_env_runner
 
 
+import torch.profiler
+
+# =============================
+# Run single forward with profiler
+# =============================
+def profile_forward(policy, example_obs, device):
+    policy.eval()
+    obs_dict = {k: torch.from_numpy(v).to(device) for k, v in example_obs.items()}
+
+    with torch.no_grad():
+        with torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True
+        ) as prof:
+            # 前向推理
+            _ = policy.predict_action(obs_dict, language_goal=["dummy"]*obs_dict["agentview_image"].size(0))
+
+    # 输出 top20 kernel / operator
+    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
+
+    # 可以保存到 json
+    prof_export_path = os.path.join(output_dir, "profiler.json")
+    prof.export_chrome_trace(prof_export_path)
+    print(f"[Profiler] Saved trace → {prof_export_path}")
+
+
 # ===============================
 #     Timing System (Layer + Module)
 # ===============================
@@ -120,6 +151,13 @@ def main(checkpoint, output_dir, device, dataset_path):
 
     # Run environments
     env_runners = load_env_runner(cfg, output_dir)
+
+    example_env = env_runners[0] if isinstance(env_runners, list) else env_runners
+    example_obs = example_env.env.reset()  # 返回 dict of numpy arrays
+
+    # 只跑一次前向
+    print("[Profiler] Running forward-only profiling ...")
+    profile_forward(policy, example_obs, device)
 
     if "libero" in cfg.task.name:
         step_log = {}
