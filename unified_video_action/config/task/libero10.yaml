@@ -36,7 +36,7 @@ dataset:
   shape_meta: *shape_meta
   abs_action: true
   dataset_path: data/libero_10
-  language_emb_model: clip
+  language_emb_model: None  #clip
   horizon: 32
   n_obs_steps: 16
   pad_after: 7
