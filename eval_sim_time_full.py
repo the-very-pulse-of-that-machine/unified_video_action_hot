@@ -46,9 +46,9 @@ def profile_forward(policy, example_obs, device):
     print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
 
     # 可以保存到 json
-    prof_export_path = os.path.join(output_dir, "profiler.json")
-    prof.export_chrome_trace(prof_export_path)
-    print(f"[Profiler] Saved trace → {prof_export_path}")
+    #prof_export_path = os.path.join(output_dir, "profiler.json")
+    #prof.export_chrome_trace(prof_export_path)
+    #print(f"[Profiler] Saved trace → {prof_export_path}")
 
 
 # ===============================
