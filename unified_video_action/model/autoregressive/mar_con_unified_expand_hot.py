@@ -817,7 +817,8 @@ class MAR(nn.Module):
         timer_handle = self.timer.start("MAE Decoder (total)")
         # mask 形状为 [B, T, S]
         B, T, S = mask.size()
-        text_len = self.buffer_size_text
+        if self.language_emb_model == "clip" and self.language_emb_model_type == 1:
+            text_len = self.buffer_size_text
 
         # 展平 mask: [B, T, S] -> [B, T*S]
         mask = rearrange(mask, "b t s -> b (t s)")
