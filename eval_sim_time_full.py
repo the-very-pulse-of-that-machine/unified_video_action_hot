@@ -44,6 +44,10 @@ def profile_forward(policy, example_obs, device):
 
     # 输出 top20 kernel / operator
     print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
+    print(prof.key_averages().table(
+    sort_by="count",
+    row_limit=20
+))
 
     # 可以保存到 json
     #prof_export_path = os.path.join(output_dir, "profiler.json")
