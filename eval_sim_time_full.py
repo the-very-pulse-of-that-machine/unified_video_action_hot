@@ -176,6 +176,8 @@ def main(checkpoint, output_dir, device, dataset_path):
         runner_log = step_log
 
     else:
+        example_env = env_runners[0] if isinstance(env_runners, list) else env_runners
+        example_obs = example_env.env.reset()  # 返回 dict of numpy arrays
         profile_forward(policy, example_obs, device)
         env_runner = env_runners
         runner_log = env_runner.run(policy)
