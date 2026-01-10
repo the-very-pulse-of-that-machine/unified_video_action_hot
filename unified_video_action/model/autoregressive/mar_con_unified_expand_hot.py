@@ -1389,6 +1389,8 @@ class MAR(nn.Module):
                 mask_len = torch.Tensor([np.floor(self.seq_len * mask_ratio)]).to(
                     self.device
                 )
+                
+                self.timer.summary()
 
                 # take the first frame mask
                 mask_ = mask[:, 0]
