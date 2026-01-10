@@ -1370,6 +1370,7 @@ class MAR(nn.Module):
                     proprioception_input=proprioception_input,
                 )
                 z = self.forward_mae_decoder(x, mask)
+                self.timer.summary()
 
                 if self.predict_action:
                     act_cfg = 1.0
@@ -1390,7 +1391,6 @@ class MAR(nn.Module):
                     self.device
                 )
                 
-                self.timer.summary()
 
                 # take the first frame mask
                 mask_ = mask[:, 0]
