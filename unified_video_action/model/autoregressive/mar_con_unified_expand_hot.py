@@ -1,5 +1,4 @@
 from functools import partial
-from time_utils import CUDATimer
 
 import numpy as np
 from tqdm import tqdm
@@ -14,6 +13,7 @@ from timm.models.vision_transformer import Block
 from unified_video_action.model.autoregressive.diffusion_loss import DiffLoss
 from unified_video_action.model.autoregressive.diffusion_action_loss import DiffActLoss
 from unified_video_action.model.autoregressive.hot import CrossAttention, cluster_dpc_knn, select_channel
+from unified_video_action.model.autoregressive.time_utils import CUDATimer
 
 
 def mask_by_order(mask_len, order, bsz, seq_len, device):
