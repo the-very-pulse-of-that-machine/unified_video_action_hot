@@ -1,4 +1,5 @@
 from functools import partial
+from time_utils import CUDATimer
 
 import numpy as np
 from tqdm import tqdm
@@ -109,7 +110,7 @@ class MAR(nn.Module):
         self.select_ratio = hot_select_ratio
 
 
-
+        self.timer = CUDATimer()
 
 
 
@@ -486,6 +487,7 @@ class MAR(nn.Module):
         task_mode=None,         # 任务模式: policy_model / inverse_model / video_model …
         proprioception_input={},# 本体感知输入
     ):
+        timer_handle = self.timer.start("MAE Encoder (total)")
         # x shape: [B, T, S, C]
         B, T, S, _ = x.size()
 
@@ -806,11 +808,13 @@ class MAR(nn.Module):
 
         # 最终编码后的序列
         x = self.encoder_norm(x)
+        self.timer.stop(timer_handle)
 
         return x
 
 
     def forward_mae_decoder(self, x, mask):
+        timer_handle = self.timer.start("MAE Decoder (total)")
         # mask 形状为 [B, T, S]
         B, T, S = mask.size()
         text_len = self.buffer_size_text
@@ -952,6 +956,7 @@ class MAR(nn.Module):
         x = x + diffusion_combined_pos_embed
 
         # decoder 输出序列
+        self.timer.stop(timer_handle)
         return x
 
 

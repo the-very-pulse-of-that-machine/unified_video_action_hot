@@ -321,6 +321,7 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
             "action": action,
             "action_pred": action_pred,
         }
+        self.model.timer.summary()
         return result
 
     # ========= training  ============
