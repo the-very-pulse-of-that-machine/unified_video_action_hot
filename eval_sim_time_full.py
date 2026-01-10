@@ -176,6 +176,7 @@ def main(checkpoint, output_dir, device, dataset_path):
         runner_log = step_log
 
     else:
+        profile_forward(policy, example_obs, device)
         env_runner = env_runners
         runner_log = env_runner.run(policy)
 
