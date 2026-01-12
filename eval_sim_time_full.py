@@ -25,7 +25,7 @@ import torch.profiler
 # =============================
 # Run single forward with profiler
 # =============================
-def profile_forward(policy, example_obs, device):
+def profile_forward(policy, example_obs, device, data):
     policy.eval()
     obs_dict = {k: torch.from_numpy(v).to(device) for k, v in example_obs.items()}
 
@@ -40,10 +40,14 @@ def profile_forward(policy, example_obs, device):
             with_stack=True
         ) as prof:
             # 前向推理
-            _ = policy.predict_action(obs_dict, language_goal=["dummy"]*obs_dict["agentview_image"].size(0))
+            _ = policy.predict_action(obs_dict, language_goal=["dummy"]*obs_dict[data].size(0))
 
     # 输出 top20 kernel / operator
     print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
+    print(prof.key_averages().table(
+    sort_by="count",
+    row_limit=20
+))
 
     # 可以保存到 json
     #prof_export_path = os.path.join(output_dir, "profiler.json")
@@ -158,7 +162,7 @@ def main(checkpoint, output_dir, device, dataset_path):
 
         # 只跑一次前向
         print("[Profiler] Running forward-only profiling ...")
-        profile_forward(policy, example_obs, device)
+        profile_forward(policy, example_obs, device, "agentview_image")
         step_log = {}
         for env_runner in env_runners:
             runner_log = env_runner.run(policy)
@@ -172,6 +176,9 @@ def main(checkpoint, output_dir, device, dataset_path):
         runner_log = step_log
 
     else:
+        example_env = env_runners[0] if isinstance(env_runners, list) else env_runners
+        example_obs = example_env.env.reset()  # 返回 dict of numpy arrays
+        profile_forward(policy, example_obs, device, "image")
         env_runner = env_runners
         runner_log = env_runner.run(policy)
 

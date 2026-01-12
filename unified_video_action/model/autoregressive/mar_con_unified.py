@@ -12,6 +12,7 @@ from torch.utils.checkpoint import checkpoint
 from timm.models.vision_transformer import Block
 from unified_video_action.model.autoregressive.diffusion_loss import DiffLoss
 from unified_video_action.model.autoregressive.diffusion_action_loss import DiffActLoss
+from unified_video_action.model.autoregressive.time_utils import CUDATimer
 
 
 def mask_by_order(mask_len, order, bsz, seq_len, device):
@@ -80,7 +81,7 @@ class MAR(nn.Module):
         self.vae_embed_dim = vae_embed_dim
         self.grad_checkpointing = grad_checkpointing
         self.label_drop_prob = label_drop_prob
-
+        self.timer = CUDATimer()
         # ========= Masked MAE =========
         # variant masking ratio, a left-half truncated Gaussian centered at 100% masking ratio with std 0.25
         self.mask_ratio_generator = stats.truncnorm(
@@ -453,6 +454,7 @@ class MAR(nn.Module):
         task_mode=None,
         proprioception_input={},
     ):
+        timer_handle = self.timer.start("MAE Encoder (total)")
         B, T, S, _ = x.size()
         mask = rearrange(mask, "b t s -> b (t s)")
 
@@ -655,10 +657,12 @@ class MAR(nn.Module):
             for block in self.encoder_blocks:
                 x = block(x)
         x = self.encoder_norm(x)
+        self.timer.stop(timer_handle)
 
         return x
 
     def forward_mae_decoder(self, x, mask):
+        timer_handle = self.timer.start("MAE Decoder (total)")
         B, T, S = mask.size()
         mask = rearrange(mask, "b t s -> b (t s)")
         x = self.decoder_embed(x)
@@ -723,6 +727,7 @@ class MAR(nn.Module):
 
         x = x + diffusion_combined_pos_embed
 
+        self.timer.stop(timer_handle)
         return x
 
     def forward_loss(
@@ -1033,6 +1038,7 @@ class MAR(nn.Module):
                     proprioception_input=proprioception_input,
                 )
                 z = self.forward_mae_decoder(x, mask)
+                self.timer.summary()
 
                 if self.predict_action:
                     act_cfg = 1.0
