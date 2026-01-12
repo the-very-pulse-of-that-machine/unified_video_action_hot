@@ -80,15 +80,27 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, max_save_steps):
         # 总是尝试保存图像，但限制总数不超过 max_save_steps
         if len(saved_data["raw_images"]) < max_save_steps:
             obs_dict = args[0]
-            if isinstance(obs_dict, dict) and "image" in obs_dict:
-                # 获取原始图像数据 (0-255范围)
-                raw_image = obs_dict["image"]
-                #print(raw_image)
-                # 进行归一化：/ 127.5 - 1，与 prepare_data_predict_action 中的处理一致
-                #normalized_image = raw_image / 127.5 - 1.0
-                saved_data["raw_images"].append(
-                    raw_image.detach().cpu().numpy()
-                )
+            if "libero" in cfg.task.name:
+                if isinstance(obs_dict, dict) and "agentview_image" in obs_dict:
+                    # 获取原始图像数据 (0-255范围)
+                    raw_image = obs_dict["agentview_image"]
+                    #print(raw_image)
+                    # 进行归一化：/ 127.5 - 1，与 prepare_data_predict_action 中的处理一致
+                    #normalized_image = raw_image / 127.5 - 1.0
+                    saved_data["raw_images"].append(
+                        raw_image.detach().cpu().numpy()
+                    )
+            else:
+                if isinstance(obs_dict, dict) and "image" in obs_dict:
+                    # 获取原始图像数据 (0-255范围)
+                    raw_image = obs_dict["image"]
+                    #print(raw_image)
+                    # 进行归一化：/ 127.5 - 1，与 prepare_data_predict_action 中的处理一致
+                    #normalized_image = raw_image / 127.5 - 1.0
+                    saved_data["raw_images"].append(
+                        raw_image.detach().cpu().numpy()
+                    )
+
         return original_predict_action(*args, **kwargs)
 
     policy.predict_action = wrapped_predict_action
