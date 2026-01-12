@@ -79,7 +79,7 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, max_save_steps):
         """
         # 总是尝试保存图像，但限制总数不超过 max_save_steps
         if len(saved_data["raw_images"]) < max_save_steps:
-            print("saving ")
+            print("saving images")
             obs_dict = args[0]
             if "libero" in cfg.task.name:
                 if isinstance(obs_dict, dict) and "agentview_image" in obs_dict:
@@ -133,6 +133,7 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, max_save_steps):
             and model.selected_token_index is not None
             and saved_data["step_count"] < max_save_steps
         ):
+            print("saving tokens")
             saved_data["selected_token_indices"].append(
                 model.selected_token_index.detach().cpu().numpy()
             )
@@ -140,7 +141,20 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, max_save_steps):
                 model.hot_input_token.detach().cpu().numpy()
             )
             saved_data["step_count"] += 1
-            
+        
+        else:
+            # =====================================================
+            # Save
+            # =====================================================
+            out_path = os.path.join(output_dir, "saved_data.pkl")
+            with open(out_path, "wb") as f:
+                pickle.dump(saved_data, f)
+
+            print(f"[Saved] → {out_path}")
+            print(f"Steps saved: {saved_data['step_count']}")
+            print(f"Raw image shape example: {saved_data['raw_images'][0].shape}")
+            exit()
+                    
 
         return out
 
@@ -158,17 +172,6 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, max_save_steps):
     # restore
     policy.predict_action = original_predict_action
     model.forward_mae_encoder = original_forward_mae_encoder
-
-    # =====================================================
-    # Save
-    # =====================================================
-    out_path = os.path.join(output_dir, "saved_data.pkl")
-    with open(out_path, "wb") as f:
-        pickle.dump(saved_data, f)
-
-    print(f"[Saved] → {out_path}")
-    print(f"Steps saved: {saved_data['step_count']}")
-    print(f"Raw image shape example: {saved_data['raw_images'][0].shape}")
 
 
 if __name__ == "__main__":
