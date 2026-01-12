@@ -79,6 +79,7 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, max_save_steps):
         """
         # 总是尝试保存图像，但限制总数不超过 max_save_steps
         if len(saved_data["raw_images"]) < max_save_steps:
+            print("saving ")
             obs_dict = args[0]
             if "libero" in cfg.task.name:
                 if isinstance(obs_dict, dict) and "agentview_image" in obs_dict:
