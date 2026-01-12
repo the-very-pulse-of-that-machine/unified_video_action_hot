@@ -14,7 +14,7 @@ import pickle
 from omegaconf import open_dict
 
 from unified_video_action.workspace.base_workspace import BaseWorkspace
-from unified_video_action.utils.load_env import load_env_runner
+from unified_video_action.utils.load_env import load_env_runner, env_rollout
 
 
 @click.command()
@@ -149,7 +149,10 @@ def main(checkpoint, output_dir, device, dataset_path, n_test, max_save_steps):
     # Run
     # =====================================================
     print("[Run] Collecting raw images + token indices...")
-    env_runner.run(policy)
+    if "libero" in cfg.task.name:
+        env_rollout(cfg, env_runner, policy)
+    else:
+        env_runner.run(policy)
 
     # restore
     policy.predict_action = original_predict_action
