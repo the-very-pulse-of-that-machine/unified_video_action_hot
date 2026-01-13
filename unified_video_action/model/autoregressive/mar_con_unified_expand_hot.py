@@ -499,8 +499,8 @@ class MAR(nn.Module):
         # ---------------------------------------------------------------------
         if task_mode == "policy_model":
             # cond: 投影 + 展平为 [B, T*S, C]
-            cond = self.z_proj_cond(cond)
-            cond = rearrange(cond, "b t s c -> b (t s) c")
+            cond = self.z_proj_cond(cond)  # 56 4 256 768
+            cond = rearrange(cond, "b t s c -> b (t s) c")  # 56 1024 768
 
             # 策略模型不使用原始 x，用 fake latent 替代
             x = self.fake_latent_x.unsqueeze(1).expand(B, cond.size(1), -1)
@@ -667,12 +667,12 @@ class MAR(nn.Module):
                     parts.extend(
                         [proprioception_image_cond, proprioception_state_cond_expand]
                     )
-            x = torch.cat(parts, dim=-1)
+            x = torch.cat(parts, dim=-1)   # 56 1024 2304
 
         # ---------------------------------------------------------------------
         # 🟦 6. 模态融合 Projection
         # ---------------------------------------------------------------------
-        x = self.proj_cond_x_layer(x)
+        x = self.proj_cond_x_layer(x)  # 56 1024 768
 
         # ---------------------------------------------------------------------
         # 🟦 7. 时空位置编码
@@ -1298,11 +1298,11 @@ class MAR(nn.Module):
         x=None,
     ):
         self.device = cond.device
-        B, T, C, H, W = cond.size()
-        cond = rearrange(cond, "b t c h w -> (b t) c h w")
+        B, T, C, H, W = cond.size()   # 56 4 16 16 16
+        cond = rearrange(cond, "b t c h w -> (b t) c h w")  
         cond = self.patchify(cond)
         cond = rearrange(
-            cond, "(b t) seq_len c -> b t seq_len c", b=B
+            cond, "(b t) seq_len c -> b t seq_len c", b=B  # 56 4 256 16
         )
 
         # ========= Proprioception =========

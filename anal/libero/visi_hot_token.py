@@ -9,7 +9,7 @@ class TokenVisualizer:
                  n_condition_frames=4,
                  tokens_per_frame=256,
                  grid_size=16,
-                 original_image_size=(96, 96),
+                 original_image_size=(128, 128),
                  model_image_size=256):
         """
         Initialize with all confirmed information
@@ -57,6 +57,7 @@ class TokenVisualizer:
         os.makedirs(save_dir, exist_ok=True)
         
         B, T_total, C, H, W = raw_images.shape
+        print(raw_images.shape)
         
         print(f"\n=== Visualizing Step {step_idx} ===")
         print(f"Original images: {T_total} frames, size: {H}x{W}")
@@ -64,6 +65,8 @@ class TokenVisualizer:
         
         # Analyze token distribution for this step
         tokens = token_indices.flatten()
+        tokens = tokens[tokens >= 64] - 64  # 重新映射图像 token 索引从 0 开始
+
         frame_distribution = {}
         for token_idx in tokens:
             frame_idx, row, col = self.token_to_frame_and_position(token_idx)
@@ -248,6 +251,7 @@ class TokenVisualizer:
         
         for step_idx in range(n_steps):
             tokens = token_indices_list[step_idx].flatten()
+            tokens = tokens[tokens >= 64] - 64
             tokens_per_step.append(len(tokens))
             
             for token_idx in tokens:
@@ -278,6 +282,8 @@ class TokenVisualizer:
         
         for step_idx in range(n_steps):
             tokens = token_indices_list[step_idx].flatten()
+            # Apply same adjustment as in visualize_single_step
+            tokens = tokens[tokens >= 64] - 64  # 重新映射图像 token 索引从 0 开始
             for token_idx in tokens:
                 frame_idx, row, col = self.token_to_frame_and_position(token_idx)
                 overall_heatmap[row, col] += 1
@@ -553,7 +559,7 @@ def visualize_all_steps_and_aggregate(pkl_path="1.pkl",
 
 if __name__ == "__main__":
     results = visualize_all_steps_and_aggregate(
-        pkl_path="3.pkl",
-        step_output_dir="output/step_visualizations",
-        max_steps_to_visualize=10  # Visualize first 10 steps only
+        pkl_path="lib_full2.pkl",
+        step_output_dir="output/step_visualizations2",
+        max_steps_to_visualize=50  # Visualize first 10 steps only
     )
