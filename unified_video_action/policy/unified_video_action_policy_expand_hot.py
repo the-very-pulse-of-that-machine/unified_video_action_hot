@@ -227,7 +227,7 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
         result: must include "action" key
         """
         
-        obs_dict = resize_image_eval(self.task_name, obs_dict)
+        obs_dict = resize_image_eval(self.task_name, obs_dict)  # 1, 16, 3, 256, 256
         B, T, C, H, W = obs_dict["image"].shape
 
         ## language goal
@@ -275,7 +275,7 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
 
         c, proprioception_input, _ = process_data(
             {"obs": obs_dict}, task_name=self.task_name, eval=True, **self.kwargs
-        )
+        )    #[1, 3, 4, 256, 256]
 
         if self.use_proprioception:
             if "second_image" in proprioception_input:
@@ -284,7 +284,7 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
                 )
                 proprioception_input["second_image_z"] = second_image_z
 
-        c, latent_size = extract_latent_autoregressive(self.vae_model, c.detach())
+        c, latent_size = extract_latent_autoregressive(self.vae_model, c.detach()) # c [1, 4, 16, 16, 16] b t c h w
 
         z, act_out = self.model.sample_tokens(
             bsz=B,
@@ -298,10 +298,10 @@ class UnifiedVideoActionPolicy(BaseImagePolicy):
             proprioception_input=proprioception_input,
             task_mode="policy_model",
             vae_model=self.vae_model,
-        )
+        )  # act_out 1 16 10
 
         # unnormalize prediction
-        Da = self.action_dim
+        Da = self.action_dim   # 10
 
         #print("z:", z)
         #print("act_out:", act_out)
