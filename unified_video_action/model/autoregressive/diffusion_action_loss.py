@@ -167,18 +167,18 @@ class DiffActLoss(nn.Module):
 
     def sample(self, z, temperature=1.0, cfg=1.0, text_latents=None):
         if self.act_model_type == "conv_fc":
-            z = rearrange(z, "b (t s) c -> (b t) s c", t=self.n_frames)
-            z = rearrange(z, "b (w h) c -> b w h c", w=self.w)
+            z = rearrange(z, "b (t s) c -> (b t) s c", t=self.n_frames)  # 224 256 768
+            z = rearrange(z, "b (w h) c -> b w h c", w=self.w)  # 224 16 16 768
             z = rearrange(z, "b w h c -> b c w h")
-            z = self.conv(z)
-            z = rearrange(z, "b c w h -> b (c w h)")
+            z = self.conv(z)  # 224 768 4 4
+            z = rearrange(z, "b c w h -> b (c w h)")  # 224 12288
             z = self.fc(z)
 
-            z = rearrange(z, "(b t) c -> b t c", t=self.n_frames)
+            z = rearrange(z, "(b t) c -> b t c", t=self.n_frames)  #224 768
+            z = z.permute(0, 2, 1)   # 56 4 768
+            z = self.interpolate(z)  # 56 768 4
             z = z.permute(0, 2, 1)
-            z = self.interpolate(z)
-            z = z.permute(0, 2, 1)
-            z = self.refine(z)
+            z = self.refine(z)  # 56 16 768
             
         elif self.act_model_type == "conv_ori":
             z = rearrange(
@@ -212,7 +212,7 @@ class DiffActLoss(nn.Module):
             model_kwargs = dict(c=z, cfg_scale=cfg)
             sample_fn = self.net.forward_with_cfg
         else:
-            noise = torch.randn(z.shape[0], self.in_channels).cuda()
+            noise = torch.randn(z.shape[0], self.in_channels).cuda()  # 896 2
             model_kwargs = dict(c=z)
             sample_fn = self.net.forward
 
